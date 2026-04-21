@@ -23,7 +23,7 @@
 //     They cannot read messages or learn the room secret.
 //   - No history is stored anywhere. Close the tab and it's gone.
 
-import {joinRoom, selfId} from "https://esm.sh/trystero@0.23.1/torrent";
+import {joinRoom, selfId} from "https://esm.sh/@trystero-p2p/torrent@0.23.1";
 
 const APP_ID = "bratan-chat/v1";
 const ROOM_SALT = "bratan-chat/room/v1";
