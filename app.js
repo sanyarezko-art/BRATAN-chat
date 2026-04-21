@@ -23,7 +23,7 @@
 
 import {joinRoom as joinNostr, selfId} from "https://esm.sh/@trystero-p2p/nostr@0.23.1";
 import {joinRoom as joinTorrent} from "https://esm.sh/@trystero-p2p/torrent@0.23.1";
-import {GIFEncoder, quantize, applyPalette} from "https://esm.sh/gifenc@1.0.3";
+import {GIFEncoder, quantize, applyPalette} from "https://cdn.jsdelivr.net/npm/gifenc@1.0.3/+esm";
 
 const APP_ID = "bratan-chat/v1";
 const ROOM_SALT = "bratan-chat/room/v1";
