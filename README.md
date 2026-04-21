@@ -9,7 +9,7 @@ End-to-end encrypted, peer-to-peer web chat. **No server. No accounts. No histor
 - The secret is placed in the URL fragment (`https://.../#<base64>`). Fragments
   are **never sent to any server**, so the secret stays client-side.
 - The secret is used to derive two things locally via SHA-256:
-  - `roomId` = used by [Trystero](https://github.com/dmotz/trystero) to find
+  - `roomId` = used by [Trystero](https://github.com/trystero-p2p/trystero) to find
     other peers through public BitTorrent trackers.
   - `password` = given to Trystero, which runs PBKDF2 + AES-GCM on every
     message on top of the already-encrypted WebRTC data channel.
