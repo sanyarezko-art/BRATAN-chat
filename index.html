@@ -1,82 +1,100 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BRATAN-chat</title>
-  <meta name="description" content="End-to-end encrypted P2P web chat. No server, no accounts." />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='52'%3E%F0%9F%94%90%3C/text%3E%3C/svg%3E" />
+  <title>BRATAN-chat 🤝</title>
+  <meta name="description" content="Приватный P2P-чат с end-to-end шифрованием. Без серверов, без аккаунтов." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='54'%3E%F0%9F%A4%9D%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <!-- Landing: no room chosen yet -->
+  <div class="bg-glow"></div>
+
+  <!-- Landing -->
   <section id="landing" class="screen" hidden>
-    <header>
+    <div class="hero">
+      <div class="logo">🤝</div>
       <h1>BRATAN-chat</h1>
-      <p class="subtitle">End-to-end encrypted peer-to-peer chat. No server, no accounts, no logs.</p>
-    </header>
-    <div class="actions">
-      <button id="create" type="button">Create a new room</button>
-      <div class="divider"><span>or</span></div>
+      <p class="subtitle">Приватный чат для своих. P2P, сквозное шифрование, без серверов, без аккаунтов, без истории.</p>
+    </div>
+    <div class="card actions">
+      <button id="create" class="primary" type="button">
+        <span class="btn-emoji">✨</span> Создать новую комнату
+      </button>
+      <div class="divider"><span>или</span></div>
       <form id="join-form">
-        <label for="join-input">Paste an invite link or room secret</label>
-        <input id="join-input" type="text" placeholder="https://.../#abc123..." required autocomplete="off" />
-        <button type="submit">Join room</button>
+        <label for="join-input">🔗 Вставь ссылку-приглашение</label>
+        <input id="join-input" type="text" placeholder="https://.../#..." required autocomplete="off" />
+        <button type="submit" class="secondary">Зайти в комнату</button>
       </form>
     </div>
-    <footer>
-      <p>
-        Messages travel directly between browsers over WebRTC (DTLS-SRTP) and are additionally
-        encrypted with AES-GCM using a key derived from the room secret. Your room secret lives in
-        the URL fragment (after <code>#</code>) — it is never sent to any server.
-      </p>
+    <footer class="fine">
+      🔐 Сообщения идут напрямую между браузерами через WebRTC (DTLS-SRTP) и дополнительно шифруются AES-GCM ключом из секрета комнаты. Секрет лежит во фрагменте URL (после&nbsp;<code>#</code>) и никогда не уходит на сервер.
     </footer>
   </section>
 
-  <!-- Invite screen: just created a room, show link -->
+  <!-- Invite screen -->
   <section id="invite" class="screen" hidden>
-    <header>
-      <h1>Room created</h1>
-      <p class="subtitle">Share this link with exactly the people you want in the chat. Anyone with the link can join.</p>
-    </header>
-    <div class="actions">
+    <div class="hero">
+      <div class="logo">🎉</div>
+      <h1>Комната готова</h1>
+      <p class="subtitle">Отправь эту ссылку братанам. Кто имеет ссылку — тот внутри.</p>
+    </div>
+    <div class="card actions">
       <input id="invite-link" type="text" readonly />
-      <button id="copy-invite" type="button">Copy invite link</button>
-      <button id="enter-room" type="button">Enter room</button>
-      <button id="back-to-landing" type="button" class="secondary">Back</button>
+      <button id="copy-invite" class="primary" type="button">
+        <span class="btn-emoji">📋</span> Скопировать ссылку
+      </button>
+      <button id="enter-room" class="secondary" type="button">
+        <span class="btn-emoji">🚪</span> Войти в комнату
+      </button>
+      <button id="back-to-landing" type="button" class="ghost">← Назад</button>
     </div>
   </section>
 
   <!-- Nickname screen -->
   <section id="nick" class="screen" hidden>
-    <header>
-      <h1>Pick a nickname</h1>
-      <p class="subtitle">Visible to other peers in this room. No account, no verification.</p>
-    </header>
-    <form id="nick-form" class="actions">
-      <input id="nick-input" type="text" maxlength="32" placeholder="bratan" required autocomplete="off" />
-      <button type="submit">Enter chat</button>
+    <div class="hero">
+      <div class="logo">🫡</div>
+      <h1>Как тебя звать?</h1>
+      <p class="subtitle">Увидят другие братаны в комнате. Без регистрации, без проверок.</p>
+    </div>
+    <form id="nick-form" class="card actions">
+      <input id="nick-input" type="text" maxlength="32" placeholder="братан" required autocomplete="off" />
+      <button type="submit" class="primary">
+        <span class="btn-emoji">🚀</span> В чат
+      </button>
     </form>
   </section>
 
   <!-- Chat screen -->
   <section id="chat" class="screen" hidden>
     <header class="chat-header">
-      <div>
-        <h1>BRATAN-chat</h1>
-        <p id="peer-count" class="subtitle">connecting…</p>
+      <div class="chat-title">
+        <span class="room-emoji" id="room-emoji">🤝</span>
+        <div>
+          <h1>BRATAN-chat</h1>
+          <p id="peer-count" class="subtitle">соединяемся…</p>
+        </div>
       </div>
       <div class="chat-actions">
-        <button id="copy-invite-2" type="button" class="secondary" title="Copy invite link">Invite</button>
-        <button id="leave" type="button" class="secondary">Leave</button>
+        <button id="copy-invite-2" type="button" class="ghost" title="Скопировать ссылку-приглашение">
+          🔗 <span class="btn-label">Пригласить</span>
+        </button>
+        <button id="leave" type="button" class="ghost">
+          🚪 <span class="btn-label">Выйти</span>
+        </button>
       </div>
     </header>
     <main>
       <ol id="messages" aria-live="polite"></ol>
     </main>
     <form id="composer" autocomplete="off">
-      <input id="message-input" type="text" placeholder="Message" maxlength="4000" autofocus required />
-      <button type="submit">Send</button>
+      <input id="message-input" type="text" placeholder="Написать братанам…" maxlength="4000" autofocus required />
+      <button type="submit" class="primary" aria-label="Отправить">
+        <span class="btn-emoji">📨</span>
+      </button>
     </form>
   </section>
 
