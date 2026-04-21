@@ -11,91 +11,203 @@
 <body>
   <div class="bg-glow"></div>
 
-  <!-- Landing -->
-  <section id="landing" class="screen" hidden>
-    <div class="hero">
-      <div class="logo">🤝</div>
-      <h1>BRATAN-chat</h1>
-      <p class="subtitle">Приватный чат для своих. P2P, сквозное шифрование, без серверов, без аккаунтов, без истории.</p>
-    </div>
-    <div class="card actions">
-      <button id="create" class="primary" type="button">
-        <span class="btn-emoji">✨</span> Создать новую комнату
-      </button>
-      <div class="divider"><span>или</span></div>
-      <form id="join-form">
-        <label for="join-input">🔗 Вставь ссылку-приглашение</label>
-        <input id="join-input" type="text" placeholder="https://.../#..." required autocomplete="off" />
-        <button type="submit" class="secondary">Зайти в комнату</button>
+  <!-- Nickname gate (shown once, first visit) -->
+  <section id="nick-gate" class="modal-layer" hidden>
+    <div class="modal">
+      <div class="hero">
+        <div class="logo">🫡</div>
+        <h1>Как тебя звать?</h1>
+        <p class="subtitle">Ник видят другие в чате. Без регистрации, без серверов.</p>
+      </div>
+      <form id="nick-form" class="actions">
+        <input id="nick-input" type="text" maxlength="32" placeholder="братан" required autocomplete="off" />
+        <button type="submit" class="primary">
+          <span class="btn-emoji">🚀</span> Погнали
+        </button>
       </form>
     </div>
-    <footer class="fine">
-      🔐 Сообщения идут напрямую между браузерами через WebRTC (DTLS-SRTP) и дополнительно шифруются AES-GCM ключом из секрета комнаты. Секрет лежит во фрагменте URL (после&nbsp;<code>#</code>) и никогда не уходит на сервер.
-    </footer>
   </section>
 
-  <!-- Invite screen -->
-  <section id="invite" class="screen" hidden>
-    <div class="hero">
-      <div class="logo">🎉</div>
-      <h1>Комната готова</h1>
-      <p class="subtitle">Отправь эту ссылку братанам. Кто имеет ссылку — тот внутри.</p>
-    </div>
-    <div class="card actions">
-      <input id="invite-link" type="text" readonly />
-      <button id="copy-invite" class="primary" type="button">
-        <span class="btn-emoji">📋</span> Скопировать ссылку
-      </button>
-      <button id="enter-room" class="secondary" type="button">
-        <span class="btn-emoji">🚪</span> Войти в комнату
-      </button>
-      <button id="back-to-landing" type="button" class="ghost">← Назад</button>
-    </div>
-  </section>
-
-  <!-- Nickname screen -->
-  <section id="nick" class="screen" hidden>
-    <div class="hero">
-      <div class="logo">🫡</div>
-      <h1>Как тебя звать?</h1>
-      <p class="subtitle">Увидят другие братаны в комнате. Без регистрации, без проверок.</p>
-    </div>
-    <form id="nick-form" class="card actions">
-      <input id="nick-input" type="text" maxlength="32" placeholder="братан" required autocomplete="off" />
-      <button type="submit" class="primary">
-        <span class="btn-emoji">🚀</span> В чат
-      </button>
-    </form>
-  </section>
-
-  <!-- Chat screen -->
-  <section id="chat" class="screen" hidden>
-    <header class="chat-header">
-      <div class="chat-title">
-        <span class="room-emoji" id="room-emoji">🤝</span>
-        <div>
-          <h1>BRATAN-chat</h1>
-          <p id="peer-count" class="subtitle"><span class="searching"><span class="spinner">🔍</span> ищем братанов…</span></p>
+  <!-- Main app shell: sidebar + chat view -->
+  <div id="app" hidden>
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <span class="brand-emoji">🤝</span>
+          <span class="brand-name">BRATAN</span>
         </div>
+        <button id="new-chat" class="icon-btn" type="button" title="Новый чат">＋</button>
       </div>
-      <div class="chat-actions">
-        <button id="copy-invite-2" type="button" class="ghost" title="Скопировать ссылку-приглашение">
-          🔗 <span class="btn-label">Пригласить</span>
-        </button>
-        <button id="leave" type="button" class="ghost">
-          🚪 <span class="btn-label">Выйти</span>
-        </button>
+      <ul id="chat-list" class="chat-list"></ul>
+      <div class="sidebar-empty" id="sidebar-empty">
+        Пока ни одного чата. Жми <span class="kbd">＋</span>
       </div>
-    </header>
-    <main>
-      <ol id="messages" aria-live="polite"></ol>
+      <div class="sidebar-footer">
+        <div class="me">
+          <span class="avatar" id="me-avatar">🙂</span>
+          <span class="me-nick" id="me-nick">—</span>
+        </div>
+        <button id="settings" class="icon-btn" type="button" title="Настройки">⚙️</button>
+      </div>
+    </aside>
+
+    <main id="chat-view">
+      <!-- Empty state when no chat selected -->
+      <section id="empty-state" class="empty-state">
+        <div class="logo">🤝</div>
+        <h1>BRATAN-chat</h1>
+        <p class="subtitle">
+          Приватный чат для своих. P2P, сквозное шифрование, без серверов, без аккаунтов, без истории на чужих машинах.
+        </p>
+        <div class="empty-actions">
+          <button id="empty-new" class="primary" type="button">
+            <span class="btn-emoji">✨</span> Создать чат
+          </button>
+          <button id="empty-join" class="secondary" type="button">
+            <span class="btn-emoji">🔗</span> Вставить ссылку
+          </button>
+        </div>
+        <p class="fine">
+          🔐 Сообщения и медиа идут напрямую между браузерами через WebRTC (DTLS-SRTP) и дополнительно шифруются AES-GCM ключом из секрета комнаты. Секрет лежит во фрагменте URL (после&nbsp;<code>#</code>) и никогда не уходит на сервер.
+        </p>
+      </section>
+
+      <!-- Active chat -->
+      <section id="chat-pane" class="chat-pane" hidden>
+        <header class="chat-header">
+          <button id="back" class="icon-btn mobile-only" type="button" title="Назад">←</button>
+          <div class="chat-title">
+            <span class="room-emoji" id="room-emoji">🤝</span>
+            <div>
+              <h1 id="chat-name">BRATAN-chat</h1>
+              <p id="peer-count" class="subtitle">
+                <span class="searching"><span class="spinner">🔍</span> ищем…</span>
+              </p>
+            </div>
+          </div>
+          <div class="chat-actions">
+            <button id="copy-invite-2" type="button" class="icon-btn" title="Скопировать ссылку">🔗</button>
+            <button id="rename-chat" type="button" class="icon-btn" title="Переименовать">✏️</button>
+            <button id="leave-chat" type="button" class="icon-btn" title="Удалить чат">🗑️</button>
+          </div>
+        </header>
+
+        <div class="messages-scroll" id="messages-scroll">
+          <ol id="messages" aria-live="polite"></ol>
+          <button id="jump-down" class="jump-down" type="button" hidden>
+            ↓ <span id="jump-down-count">новые</span>
+          </button>
+        </div>
+
+        <form id="composer" autocomplete="off">
+          <button id="attach" type="button" class="icon-btn" title="Отправить фото или видео">📎</button>
+          <input id="file-input" type="file" accept="image/*,video/*" hidden />
+          <input id="message-input" type="text" placeholder="Написать братанам…" maxlength="4000" />
+          <button id="send-btn" type="submit" class="primary" aria-label="Отправить">
+            <span class="btn-emoji">📨</span>
+          </button>
+        </form>
+
+        <!-- Media-encoding progress overlay -->
+        <div id="media-progress" class="media-progress" hidden>
+          <div class="media-progress-inner">
+            <div class="spinner-big">🎞️</div>
+            <div id="media-progress-text">Сжимаю в GIF…</div>
+            <div class="progress-bar"><div id="progress-bar-fill"></div></div>
+            <button id="media-cancel" class="secondary" type="button">Отмена</button>
+          </div>
+        </div>
+      </section>
     </main>
-    <form id="composer" autocomplete="off">
-      <input id="message-input" type="text" placeholder="Написать братанам…" maxlength="4000" autofocus required />
-      <button type="submit" class="primary" aria-label="Отправить">
-        <span class="btn-emoji">📨</span>
-      </button>
-    </form>
+  </div>
+
+  <!-- New chat modal: create or join -->
+  <section id="new-chat-modal" class="modal-layer" hidden>
+    <div class="modal">
+      <button class="modal-close icon-btn" data-close type="button">✕</button>
+      <div class="hero">
+        <div class="logo">✨</div>
+        <h1>Новый чат</h1>
+        <p class="subtitle">Создай комнату или зайди в чужую по ссылке.</p>
+      </div>
+      <div class="actions">
+        <button id="create" class="primary" type="button">
+          <span class="btn-emoji">🆕</span> Создать новую комнату
+        </button>
+        <div class="divider"><span>или</span></div>
+        <form id="join-form">
+          <label for="join-input">🔗 Ссылка-приглашение</label>
+          <input id="join-input" type="text" placeholder="https://.../#..." required autocomplete="off" />
+          <button type="submit" class="secondary">Зайти</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- Invite modal: shown after creating a chat -->
+  <section id="invite-modal" class="modal-layer" hidden>
+    <div class="modal">
+      <button class="modal-close icon-btn" data-close type="button">✕</button>
+      <div class="hero">
+        <div class="logo">🎉</div>
+        <h1>Чат готов</h1>
+        <p class="subtitle">Отправь ссылку братанам. Кто имеет ссылку — тот внутри.</p>
+      </div>
+      <div class="actions">
+        <input id="invite-link" type="text" readonly />
+        <button id="copy-invite" class="primary" type="button">
+          <span class="btn-emoji">📋</span> Скопировать
+        </button>
+        <button id="enter-room" class="secondary" type="button" data-close>
+          <span class="btn-emoji">🚪</span> Войти
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Rename chat modal -->
+  <section id="rename-modal" class="modal-layer" hidden>
+    <div class="modal">
+      <button class="modal-close icon-btn" data-close type="button">✕</button>
+      <div class="hero">
+        <div class="logo">✏️</div>
+        <h1>Название чата</h1>
+        <p class="subtitle">Только у тебя в браузере, другие не увидят.</p>
+      </div>
+      <form id="rename-form" class="actions">
+        <input id="rename-input" type="text" maxlength="64" placeholder="Например: Пацаны" autocomplete="off" />
+        <button type="submit" class="primary">Сохранить</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Settings modal -->
+  <section id="settings-modal" class="modal-layer" hidden>
+    <div class="modal">
+      <button class="modal-close icon-btn" data-close type="button">✕</button>
+      <div class="hero">
+        <div class="logo">⚙️</div>
+        <h1>Настройки</h1>
+      </div>
+      <div class="actions">
+        <label for="settings-nick">Твой ник</label>
+        <input id="settings-nick" type="text" maxlength="32" autocomplete="off" />
+        <button id="save-nick" class="primary" type="button">Сохранить ник</button>
+        <div class="divider"><span>анонимность</span></div>
+        <p class="fine" style="text-align:left">
+          Список чатов и секреты-ключи хранятся только в <code>localStorage</code> твоего браузера. На сервер ничего не уходит. Кнопка ниже удалит всё: ключи, ник, список чатов.
+        </p>
+        <button id="wipe-all" class="danger" type="button">
+          🧨 Стереть всё (неотменяемо)
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Lightbox for viewing media -->
+  <section id="lightbox" class="lightbox" hidden>
+    <button class="lightbox-close icon-btn" data-close type="button">✕</button>
+    <img id="lightbox-img" src="" alt="" />
   </section>
 
   <script type="module" src="./app.js"></script>
