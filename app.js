@@ -23,7 +23,11 @@
 //     Они НЕ могут читать сообщения и не могут восстановить секрет.
 //   - История нигде не хранится. Закрыл вкладку — чат исчез.
 
-import {joinRoom, selfId} from "https://esm.sh/@trystero-p2p/torrent@0.23.1";
+// Используем связку стратегий: nostr (быстрое обнаружение через WSS-relays) +
+// torrent (фолбэк через BT WSS-трекеры). Пиры из обеих стратегий объединяются
+// в одной UI-комнате, так что если одна сеть лежит — вторая подхватит.
+import {joinRoom as joinNostr, selfId} from "https://esm.sh/@trystero-p2p/nostr@0.23.1";
+import {joinRoom as joinTorrent} from "https://esm.sh/@trystero-p2p/torrent@0.23.1";
 
 const APP_ID = "bratan-chat/v1";
 const ROOM_SALT = "bratan-chat/room/v1";
@@ -107,10 +111,12 @@ const roomEmojiFor = (roomId) => pickFromList(roomId, ROOM_EMOJI);
 const state = {
   secret: null, // {str, bytes}
   pendingSecret: null, // секрет только что созданной комнаты (до входа)
-  room: null,
-  sendMsg: null,
+  rooms: [], // активные Trystero-комнаты (nostr + torrent)
+  sendMsg: null, // функция, рассылающая сообщение во все rooms
   nick: localStorage.getItem("bratan.nick") || "",
   peerNames: new Map(), // peerId -> nickname
+  searchingSince: 0, // timestamp когда начали искать пиров
+  searchTimer: null,
 };
 
 // --- Room lifecycle ---------------------------------------------------------
@@ -195,14 +201,26 @@ function scrollToBottom() {
 }
 
 function updatePeerCount() {
+  const el = document.getElementById("peer-count");
   const n = state.peerNames.size;
-  const label =
-    n === 0
-      ? "ты тут один 🙂"
-      : n === 1
-      ? "1 братан на связи 🤝"
-      : `${n} братанов на связи 🤝`;
-  document.getElementById("peer-count").textContent = label;
+  if (n === 0) {
+    if (!state.searchingSince) state.searchingSince = Date.now();
+    const secs = Math.floor((Date.now() - state.searchingSince) / 1000);
+    el.innerHTML =
+      `<span class="searching"><span class="spinner">🔍</span> ищем братанов… ${secs}с</span>`;
+    if (!state.searchTimer) {
+      state.searchTimer = setInterval(updatePeerCount, 1000);
+    }
+  } else {
+    state.searchingSince = 0;
+    if (state.searchTimer) {
+      clearInterval(state.searchTimer);
+      state.searchTimer = null;
+    }
+    const label =
+      n === 1 ? "1 братан на связи 🤝" : `${n} братанов на связи 🤝`;
+    el.textContent = label;
+  }
 }
 
 async function enterChat(secretStr, secretBytes) {
@@ -214,66 +232,132 @@ async function enterChat(secretStr, secretBytes) {
   ]);
 
   document.getElementById("room-emoji").textContent = roomEmojiFor(roomId);
-
-  const room = joinRoom({appId: APP_ID, password}, roomId);
-  state.room = room;
-
-  const [sendMsg, getMsg] = room.makeAction("msg");
-  const [sendNick, getNick] = room.makeAction("nick");
-  state.sendMsg = sendMsg;
-
   document.getElementById("messages").innerHTML = "";
+  state.peerNames.clear();
+  state.searchingSince = 0;
   updatePeerCount();
   appendSystem(`зашёл как ${state.nick} ${avatarFor(selfId)}`);
 
-  room.onPeerJoin((peerId) => {
-    state.peerNames.set(peerId, peerId.slice(0, 6));
-    updatePeerCount();
-    appendSystem(`${avatarFor(peerId)} ${peerId.slice(0, 6)}… подключился 🤝`);
-    sendNick(state.nick, peerId);
-  });
+  // Поднимаем параллельно nostr и torrent. Каждая стратегия даст своих пиров,
+  // мы их мёрджим в state.peerNames по peerId (если пир соединился по обеим
+  // стратегиям, просто перезапишется теми же данными).
+  const strategies = [
+    {name: "nostr", join: joinNostr},
+    {name: "torrent", join: joinTorrent},
+  ];
+  const sendMsgFns = [];
+  const sendNickFns = [];
 
-  room.onPeerLeave((peerId) => {
-    const name = state.peerNames.get(peerId) || peerId.slice(0, 6);
-    state.peerNames.delete(peerId);
-    updatePeerCount();
-    appendSystem(`👋 ${name} вышел`);
-  });
-
-  getNick((nick, peerId) => {
-    const clean = String(nick || "").slice(0, 32) || peerId.slice(0, 6);
-    const prev = state.peerNames.get(peerId);
-    state.peerNames.set(peerId, clean);
-    if (prev && prev !== clean) {
-      appendSystem(`${avatarFor(peerId)} ${prev} теперь ${clean}`);
+  for (const {join} of strategies) {
+    let room;
+    try {
+      room = join({appId: APP_ID, password}, roomId);
+    } catch (e) {
+      console.warn("joinRoom failed", e);
+      continue;
     }
-    updatePeerCount();
-  });
+    state.rooms.push(room);
 
-  getMsg((payload, peerId) => {
-    if (!payload || typeof payload !== "object") return;
-    const text = String(payload.text || "").slice(0, 4000);
-    const ts = Number(payload.ts) || Date.now();
-    if (!text) return;
-    const nick = state.peerNames.get(peerId) || peerId.slice(0, 6);
-    renderMessage({from: peerId, nick, text, ts, self: false});
-  });
+    const [sendMsg, getMsg] = room.makeAction("msg");
+    const [sendNick, getNick] = room.makeAction("nick");
+    sendMsgFns.push(sendMsg);
+    sendNickFns.push(sendNick);
+
+    room.onPeerJoin((peerId) => {
+      const isNew = !state.peerNames.has(peerId);
+      if (isNew) {
+        state.peerNames.set(peerId, peerId.slice(0, 6));
+        appendSystem(
+          `${avatarFor(peerId)} ${peerId.slice(0, 6)}… подключился 🤝`,
+        );
+      }
+      updatePeerCount();
+      try {
+        sendNick(state.nick, peerId);
+      } catch {}
+    });
+
+    room.onPeerLeave((peerId) => {
+      // Пир может быть подключён по обеим стратегиям — считаем его ушедшим
+      // только когда его нет ни в одной.
+      setTimeout(() => {
+        const stillConnected = state.rooms.some((r) => {
+          try {
+            const peers = r.getPeers ? r.getPeers() : {};
+            return peerId in peers;
+          } catch {
+            return false;
+          }
+        });
+        if (stillConnected) return;
+        const name = state.peerNames.get(peerId) || peerId.slice(0, 6);
+        if (state.peerNames.delete(peerId)) {
+          appendSystem(`👋 ${name} вышел`);
+        }
+        updatePeerCount();
+      }, 500);
+    });
+
+    getNick((nick, peerId) => {
+      const clean = String(nick || "").slice(0, 32) || peerId.slice(0, 6);
+      const prev = state.peerNames.get(peerId);
+      state.peerNames.set(peerId, clean);
+      // Если prev — это короткая заглушка из peerId (6 симв.), это первое
+      // представление, не "переименование", его не анонсируем.
+      const wasInitial = prev && prev === peerId.slice(0, 6);
+      if (prev && prev !== clean && !wasInitial) {
+        appendSystem(`${avatarFor(peerId)} ${prev} теперь ${clean}`);
+      }
+      updatePeerCount();
+    });
+
+    getMsg((payload, peerId) => {
+      if (!payload || typeof payload !== "object") return;
+      const text = String(payload.text || "").slice(0, 4000);
+      const ts = Number(payload.ts) || Date.now();
+      if (!text) return;
+      // Дедуп: если уже показали сообщение с таким же peerId+ts+text
+      const key = `${peerId}|${ts}|${text}`;
+      if (state.seenMsgs && state.seenMsgs.has(key)) return;
+      if (!state.seenMsgs) state.seenMsgs = new Set();
+      state.seenMsgs.add(key);
+      // держим set ограниченного размера
+      if (state.seenMsgs.size > 500) {
+        state.seenMsgs = new Set([...state.seenMsgs].slice(-250));
+      }
+      const nick = state.peerNames.get(peerId) || peerId.slice(0, 6);
+      renderMessage({from: peerId, nick, text, ts, self: false});
+    });
+  }
+
+  state.sendMsg = (payload) => {
+    for (const fn of sendMsgFns) {
+      try {
+        fn(payload);
+      } catch {}
+    }
+  };
 
   show("chat");
   document.getElementById("message-input").focus();
 }
 
 async function leaveChat() {
-  if (state.room) {
+  for (const r of state.rooms) {
     try {
-      await state.room.leave();
+      await r.leave();
     } catch {}
   }
-  state.room = null;
+  state.rooms = [];
   state.sendMsg = null;
   state.peerNames.clear();
   state.secret = null;
   state.pendingSecret = null;
+  state.searchingSince = 0;
+  if (state.searchTimer) {
+    clearInterval(state.searchTimer);
+    state.searchTimer = null;
+  }
   history.replaceState(null, "", location.pathname + location.search);
   show("landing");
 }
