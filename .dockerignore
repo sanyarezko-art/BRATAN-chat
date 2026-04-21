@@ -1,0 +1,7 @@
+.git
+.github
+tsnet-state/
+chat.jsonl
+*.md
+!README.md
+LICENSE

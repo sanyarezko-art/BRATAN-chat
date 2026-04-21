@@ -13,6 +13,7 @@ import (
 	"flag"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -272,8 +273,9 @@ func run() error {
 	hostname := flag.String("hostname", "chat", "Tailscale hostname to advertise for this chat node")
 	stateDir := flag.String("state-dir", "./tsnet-state", "Directory for tsnet state (node key, certs)")
 	dbPath := flag.String("db", "./chat.jsonl", "Path to the append-only message log")
-	addr := flag.String("addr", ":80", "Address to listen on inside the tailnet")
+	addr := flag.String("addr", ":80", "Address to listen on inside the tailnet (ignored when -funnel is set)")
 	historyKeep := flag.Int("history", 200, "Number of recent messages kept in memory/served on connect")
+	funnel := flag.Bool("funnel", false, "Expose the chat publicly via Tailscale Funnel on :443 (HTTPS)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*stateDir, 0o700); err != nil {
@@ -320,7 +322,12 @@ func run() error {
 	mux.HandleFunc("/api/messages", s.handleMessages)
 	mux.HandleFunc("/ws", s.handleWS)
 
-	ln, err := srv.Listen("tcp", *addr)
+	var ln net.Listener
+	if *funnel {
+		ln, err = srv.ListenFunnel("tcp", ":443")
+	} else {
+		ln, err = srv.Listen("tcp", *addr)
+	}
 	if err != nil {
 		return err
 	}
@@ -328,9 +335,17 @@ func run() error {
 
 	status, err := lc.Status(ctx)
 	if err == nil && status.Self != nil {
-		log.Printf("tailscale-chat up on http://%s (tailnet: %s)", *hostname, status.CurrentTailnet.Name)
-		for _, ip := range status.Self.TailscaleIPs {
-			log.Printf("  also reachable at http://%s%s", ip, *addr)
+		tailnet := ""
+		if status.CurrentTailnet != nil {
+			tailnet = status.CurrentTailnet.Name
+		}
+		if *funnel {
+			log.Printf("tailscale-chat up on https://%s.%s (public via Funnel)", *hostname, tailnet)
+		} else {
+			log.Printf("tailscale-chat up on http://%s (tailnet: %s)", *hostname, tailnet)
+			for _, ip := range status.Self.TailscaleIPs {
+				log.Printf("  also reachable at http://%s%s", ip, *addr)
+			}
 		}
 	}
 

@@ -47,7 +47,39 @@ the Tailscale `WhoIs` RPC — no separate accounts, passwords, or OAuth flow.
 | `-state-dir`  | `./tsnet-state`   | Where `tsnet` stores node state (keys, certs).       |
 | `-db`         | `./chat.jsonl`    | Append-only JSON Lines log of messages.              |
 | `-addr`       | `:80`             | Address to listen on inside the tailnet.             |
+| `-funnel`     | `false`           | Expose the chat publicly via Tailscale Funnel on :443. |
 | `-history`    | `200`             | Messages kept in memory / replayed on connect.       |
+
+### Public deploy via Tailscale Funnel
+
+With `-funnel` the chat listens on `:443` using Tailscale's Funnel feature,
+which gives it a public HTTPS URL like `https://chat.<tailnet>.ts.net/`. No
+public port on the host is needed — the traffic is tunnelled through
+Tailscale. Requirements:
+
+1. The node must be tagged (e.g. `tag:chat`) and the ACL must grant the
+   `funnel` node attribute to that tag:
+   ```json
+   {
+     "tagOwners": { "tag:chat": ["autogroup:admin"] },
+     "nodeAttrs": [{ "target": ["tag:chat"], "attr": ["funnel"] }]
+   }
+   ```
+2. The auth key must include `tag:chat` (and ideally `ephemeral`).
+3. Funnel must be enabled in the Tailscale admin console for your tailnet.
+
+### Docker
+
+```sh
+docker build -t tailscale-chat .
+docker run --rm \
+  -e TS_AUTHKEY=tskey-auth-... \
+  -p 443:443 tailscale-chat
+```
+
+The included `Dockerfile` builds a static binary and runs it in a distroless
+image with `-funnel -state-dir /tmp/tsnet-state -db /tmp/chat.jsonl` by
+default. Override the entrypoint to run in tailnet-only mode.
 
 ## How identity works
 
