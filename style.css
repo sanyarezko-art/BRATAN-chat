@@ -1,0 +1,183 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f5f7;
+  --panel: #ffffff;
+  --text: #111418;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-contrast: #ffffff;
+  --border: #e5e7eb;
+  --me-bg: #dbeafe;
+  --sys: #9ca3af;
+  --danger: #b91c1c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --panel: #161920;
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --accent: #60a5fa;
+    --accent-contrast: #0b1020;
+    --border: #252a33;
+    --me-bg: #1e3a8a;
+    --sys: #6b7280;
+    --danger: #f87171;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  max-width: 640px;
+  height: 100dvh;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+.screen[hidden] { display: none; }
+
+header { padding: 24px 0 12px; }
+header h1 { margin: 0 0 4px; font-size: 22px; }
+.subtitle { margin: 0; color: var(--muted); font-size: 14px; }
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 0;
+}
+.actions input, .actions button, .actions form button {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+.actions input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.actions button {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+  font-weight: 600;
+  cursor: pointer;
+}
+.actions button:hover { filter: brightness(1.05); }
+.actions button.secondary {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+  font-weight: 500;
+}
+#join-form { display: flex; flex-direction: column; gap: 10px; }
+#join-form label { font-size: 13px; color: var(--muted); }
+
+.divider {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  position: relative;
+  margin: 4px 0;
+}
+.divider::before, .divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 40%;
+  height: 1px;
+  background: var(--border);
+}
+.divider::before { left: 0; }
+.divider::after { right: 0; }
+.divider span { background: var(--bg); padding: 0 8px; position: relative; }
+
+footer { margin-top: auto; padding: 16px 0 24px; color: var(--muted); font-size: 12px; }
+footer code { background: var(--panel); padding: 1px 4px; border-radius: 4px; }
+
+/* Chat screen */
+#chat { padding: 0; }
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.chat-header h1 { font-size: 16px; margin: 0; }
+.chat-header .subtitle { font-size: 12px; }
+.chat-actions { display: flex; gap: 8px; }
+.chat-actions button { padding: 6px 10px; font-size: 13px; border-radius: 8px; }
+
+#chat main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+#messages {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.msg {
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 80%;
+  word-wrap: break-word;
+  align-self: flex-start;
+}
+.msg.self { align-self: flex-end; background: var(--me-bg); }
+.msg.sys {
+  align-self: center;
+  background: transparent;
+  border: none;
+  color: var(--sys);
+  font-size: 12px;
+  padding: 2px 6px;
+}
+.msg .meta { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.msg .user { font-weight: 600; color: var(--text); }
+.msg .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+#composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+#composer input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+#composer input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+#composer button {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
