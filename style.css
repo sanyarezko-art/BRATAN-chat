@@ -346,3 +346,18 @@ button.ghost:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); 
 
 /* Copy confirmation badge */
 .copied-flash { background: linear-gradient(135deg, #22c55e, #14b8a6) !important; }
+
+/* Searching indicator in peer-count */
+.searching {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.searching .spinner {
+  display: inline-block;
+  animation: spin 2s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
