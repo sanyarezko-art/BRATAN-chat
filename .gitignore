@@ -1,0 +1,12 @@
+# Build artifacts
+/tailscale-chat
+*.exe
+
+# Local runtime state
+/tsnet-state/
+/chat.jsonl
+/*.db
+
+# Editor
+.idea/
+.vscode/

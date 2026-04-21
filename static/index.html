@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tailscale Chat</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Tailscale Chat</h1>
+    <div id="me" class="me">connecting&hellip;</div>
+  </header>
+  <main>
+    <ol id="messages" aria-live="polite"></ol>
+  </main>
+  <form id="composer" autocomplete="off">
+    <input id="input" type="text" placeholder="Write a message and hit enter" maxlength="4000" autofocus required />
+    <button type="submit">Send</button>
+  </form>
+  <script src="/app.js"></script>
+</body>
+</html>
