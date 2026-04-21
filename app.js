@@ -1,33 +1,44 @@
-// BRATAN-chat: end-to-end encrypted P2P web chat.
+// BRATAN-chat: E2EE P2P чат на GitHub Pages.
 //
-// Architecture:
-//   - A room is identified by a 32-byte random secret the user generates.
-//   - The secret lives in the URL fragment (`#<base64url>`). Fragments are
-//     never transmitted to any server, so the secret stays client-side.
-//   - Two derived values:
+// Архитектура:
+//   - Комната = 32-байтный случайный секрет, сгенерированный у тебя в браузере.
+//   - Секрет лежит во фрагменте URL (`#<base64url>`). Фрагмент по RFC 3986
+//     никогда не отправляется на сервер, так что секрет остаётся на клиенте.
+//   - Из секрета выводятся два значения:
 //       * roomId = hex(SHA-256(secret || "bratan-chat/room/v1"))
-//         -> this is what Trystero sends to public BitTorrent trackers for
-//         discovery. Trackers learn the hash, not the secret.
+//         -> это то, что Trystero отправляет в публичные BitTorrent-трекеры
+//         для обнаружения. Трекер видит хэш, не сам секрет.
 //       * password = base64(SHA-256(secret || "bratan-chat/password/v1"))
-//         -> passed to Trystero which derives an AES-GCM key from it via
-//         PBKDF2 and encrypts every data-channel message with it. This is
-//         an application-layer encryption layer *on top of* WebRTC's own
-//         DTLS-SRTP encryption between peers.
+//         -> передаётся в Trystero, тот выводит из него AES-GCM ключ через
+//         PBKDF2 и шифрует каждое сообщение в data channel. Это
+//         application-layer шифрование *поверх* родного DTLS-SRTP WebRTC
+//         между пирами.
 //
-// Threat model (honest):
-//   - Anyone with the invite link (the fragment) can read and send messages
-//     in the room. Treat the link like a password.
-//   - Nicknames are self-reported — other peers in the room can claim any
-//     nickname. Don't use nicknames to authenticate identities.
-//   - Public BT trackers see peer IP addresses + the SHA-256-derived roomId.
-//     They cannot read messages or learn the room secret.
-//   - No history is stored anywhere. Close the tab and it's gone.
+// Модель угроз (честно):
+//   - У кого ссылка-приглашение (фрагмент) — тот может читать и писать в
+//     комнату. Относись к ссылке как к паролю.
+//   - Ники — самоназвания. Любой в комнате может представиться кем угодно.
+//     Не аутентифицируй по нику.
+//   - Публичные BT-трекеры видят IP пиров и SHA-256-производный roomId.
+//     Они НЕ могут читать сообщения и не могут восстановить секрет.
+//   - История нигде не хранится. Закрыл вкладку — чат исчез.
 
 import {joinRoom, selfId} from "https://esm.sh/@trystero-p2p/torrent@0.23.1";
 
 const APP_ID = "bratan-chat/v1";
 const ROOM_SALT = "bratan-chat/room/v1";
 const PASSWORD_SALT = "bratan-chat/password/v1";
+
+const AVATAR_EMOJI = [
+  "🦊", "🐻", "🐼", "🐯", "🦁", "🐶", "🐵", "🦄",
+  "🐙", "🐢", "🐳", "🐬", "🐸", "🐨", "🦉", "🐰",
+  "🦝", "🐺", "🐮", "🐷", "🦔", "🦦", "🐧", "🦩",
+  "🐲", "🦖", "🦕", "🐝", "🦋", "🌵", "🍄", "⚡️",
+];
+const ROOM_EMOJI = [
+  "🤝", "🌈", "🌌", "🎆", "🔥", "⚡️", "💎", "🚀",
+  "🎸", "🎮", "🎲", "🍕", "☕️", "🌊", "🌙", "🪐",
+];
 
 const screens = {
   landing: document.getElementById("landing"),
@@ -78,10 +89,24 @@ async function derivePassword(secretBytes) {
   );
 }
 
+// --- Deterministic avatars --------------------------------------------------
+
+function pickFromList(key, list) {
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return list[Math.abs(hash) % list.length];
+}
+const avatarFor = (peerId) => pickFromList(peerId || "self", AVATAR_EMOJI);
+const roomEmojiFor = (roomId) => pickFromList(roomId, ROOM_EMOJI);
+
 // --- State ------------------------------------------------------------------
 
 const state = {
-  secret: null, // Uint8Array(32)
+  secret: null, // {str, bytes}
+  pendingSecret: null, // секрет только что созданной комнаты (до входа)
   room: null,
   sendMsg: null,
   nick: localStorage.getItem("bratan.nick") || "",
@@ -96,7 +121,7 @@ function inviteUrl(secretStr) {
 }
 
 function parseInvite(text) {
-  const trimmed = text.trim();
+  const trimmed = String(text || "").trim();
   if (!trimmed) return null;
   let secret;
   try {
@@ -124,7 +149,10 @@ function generateSecret() {
 function appendSystem(text) {
   const li = document.createElement("li");
   li.className = "msg sys";
-  li.textContent = text;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = text;
+  li.append(bubble);
   document.getElementById("messages").append(li);
   scrollToBottom();
 }
@@ -132,20 +160,31 @@ function appendSystem(text) {
 function renderMessage({from, nick, text, ts, self}) {
   const li = document.createElement("li");
   li.className = "msg" + (self ? " self" : "");
+
+  const avatar = document.createElement("span");
+  avatar.className = "avatar";
+  avatar.textContent = avatarFor(from);
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+
   const meta = document.createElement("div");
   meta.className = "meta";
   const user = document.createElement("span");
   user.className = "user";
-  user.textContent = nick || from.slice(0, 6);
+  user.textContent = nick || (from ? from.slice(0, 6) : "братан");
   const time = document.createElement("span");
   time.textContent =
-    " \u00b7 " +
+    " · " +
     new Date(ts).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
   meta.append(user, time);
+
   const body = document.createElement("div");
   body.className = "text";
   body.textContent = text;
-  li.append(meta, body);
+
+  bubble.append(meta, body);
+  li.append(avatar, bubble);
   document.getElementById("messages").append(li);
   scrollToBottom();
 }
@@ -157,7 +196,12 @@ function scrollToBottom() {
 
 function updatePeerCount() {
   const n = state.peerNames.size;
-  const label = n === 0 ? "only you here" : n === 1 ? "1 peer connected" : `${n} peers connected`;
+  const label =
+    n === 0
+      ? "ты тут один 🙂"
+      : n === 1
+      ? "1 братан на связи 🤝"
+      : `${n} братанов на связи 🤝`;
   document.getElementById("peer-count").textContent = label;
 }
 
@@ -169,6 +213,8 @@ async function enterChat(secretStr, secretBytes) {
     derivePassword(secretBytes),
   ]);
 
+  document.getElementById("room-emoji").textContent = roomEmojiFor(roomId);
+
   const room = joinRoom({appId: APP_ID, password}, roomId);
   state.room = room;
 
@@ -178,13 +224,12 @@ async function enterChat(secretStr, secretBytes) {
 
   document.getElementById("messages").innerHTML = "";
   updatePeerCount();
-  appendSystem(`joined as ${state.nick}`);
+  appendSystem(`зашёл как ${state.nick} ${avatarFor(selfId)}`);
 
   room.onPeerJoin((peerId) => {
     state.peerNames.set(peerId, peerId.slice(0, 6));
     updatePeerCount();
-    appendSystem(`${peerId.slice(0, 6)}\u2026 joined`);
-    // Announce our nickname to the newcomer.
+    appendSystem(`${avatarFor(peerId)} ${peerId.slice(0, 6)}… подключился 🤝`);
     sendNick(state.nick, peerId);
   });
 
@@ -192,12 +237,16 @@ async function enterChat(secretStr, secretBytes) {
     const name = state.peerNames.get(peerId) || peerId.slice(0, 6);
     state.peerNames.delete(peerId);
     updatePeerCount();
-    appendSystem(`${name} left`);
+    appendSystem(`👋 ${name} вышел`);
   });
 
   getNick((nick, peerId) => {
     const clean = String(nick || "").slice(0, 32) || peerId.slice(0, 6);
+    const prev = state.peerNames.get(peerId);
     state.peerNames.set(peerId, clean);
+    if (prev && prev !== clean) {
+      appendSystem(`${avatarFor(peerId)} ${prev} теперь ${clean}`);
+    }
     updatePeerCount();
   });
 
@@ -211,6 +260,7 @@ async function enterChat(secretStr, secretBytes) {
   });
 
   show("chat");
+  document.getElementById("message-input").focus();
 }
 
 async function leaveChat() {
@@ -223,15 +273,30 @@ async function leaveChat() {
   state.sendMsg = null;
   state.peerNames.clear();
   state.secret = null;
-  location.hash = "";
+  state.pendingSecret = null;
+  history.replaceState(null, "", location.pathname + location.search);
   show("landing");
+}
+
+async function flashCopy(btnId, okText) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  const old = btn.innerHTML;
+  btn.classList.add("copied-flash");
+  btn.innerHTML = `<span class="btn-emoji">✅</span> ${okText}`;
+  setTimeout(() => {
+    btn.classList.remove("copied-flash");
+    btn.innerHTML = old;
+  }, 1500);
 }
 
 // --- Event wiring -----------------------------------------------------------
 
 document.getElementById("create").addEventListener("click", () => {
   const {str} = generateSecret();
-  location.hash = str;
+  // Не ставим location.hash, чтобы не триггерить hashchange → routeFromHash,
+  // который перекрыл бы invite-экран. Пушим фрагмент только при входе в чат.
+  state.pendingSecret = str;
   document.getElementById("invite-link").value = inviteUrl(str);
   show("invite");
 });
@@ -241,34 +306,37 @@ document.getElementById("join-form").addEventListener("submit", (ev) => {
   const val = document.getElementById("join-input").value;
   const parsed = parseInvite(val);
   if (!parsed) {
-    alert("That doesn't look like a valid invite link.");
+    alert("Эээ, это не похоже на ссылку-приглашение. Проверь, что вставил.");
     return;
   }
-  location.hash = parsed.secret;
   document.getElementById("join-input").value = "";
-  routeFromHash();
+  location.hash = parsed.secret;
 });
 
 document.getElementById("copy-invite").addEventListener("click", async () => {
   const val = document.getElementById("invite-link").value;
   try {
     await navigator.clipboard.writeText(val);
-    const btn = document.getElementById("copy-invite");
-    const old = btn.textContent;
-    btn.textContent = "Copied!";
-    setTimeout(() => (btn.textContent = old), 1500);
+    flashCopy("copy-invite", "Скопировано");
   } catch {
     document.getElementById("invite-link").select();
     document.execCommand("copy");
+    flashCopy("copy-invite", "Скопировано");
   }
 });
 
 document.getElementById("enter-room").addEventListener("click", () => {
-  routeFromHash();
+  if (state.pendingSecret) {
+    location.hash = state.pendingSecret;
+    state.pendingSecret = null;
+  } else {
+    routeFromHash();
+  }
 });
 
 document.getElementById("back-to-landing").addEventListener("click", () => {
-  location.hash = "";
+  state.pendingSecret = null;
+  history.replaceState(null, "", location.pathname + location.search);
   show("landing");
 });
 
@@ -283,7 +351,13 @@ document.getElementById("nick-form").addEventListener("submit", async (ev) => {
     show("landing");
     return;
   }
-  await enterChat(parsed.secret, parsed.bytes);
+  try {
+    await enterChat(parsed.secret, parsed.bytes);
+  } catch (err) {
+    console.error(err);
+    alert("Не получилось зайти в комнату: " + err.message);
+    show("landing");
+  }
 });
 
 document.getElementById("composer").addEventListener("submit", (ev) => {
@@ -304,10 +378,7 @@ document.getElementById("copy-invite-2").addEventListener("click", async () => {
   const url = inviteUrl(state.secret.str);
   try {
     await navigator.clipboard.writeText(url);
-    const btn = document.getElementById("copy-invite-2");
-    const old = btn.textContent;
-    btn.textContent = "Copied!";
-    setTimeout(() => (btn.textContent = old), 1500);
+    flashCopy("copy-invite-2", "Скопировано");
   } catch {}
 });
 
@@ -320,14 +391,14 @@ function routeFromHash() {
     return;
   }
   if (!state.nick) {
-    document.getElementById("nick-input").value = state.nick || "";
+    document.getElementById("nick-input").value = "";
     show("nick");
     document.getElementById("nick-input").focus();
     return;
   }
   enterChat(parsed.secret, parsed.bytes).catch((err) => {
     console.error(err);
-    alert("Failed to join room: " + err.message);
+    alert("Не получилось зайти в комнату: " + err.message);
     show("landing");
   });
 }
