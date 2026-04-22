@@ -239,6 +239,7 @@
   <!-- Full-screen call overlay -->
   <section id="call-overlay" class="call-overlay" hidden>
     <div class="call-header">
+      <button id="call-minimize" class="icon-btn call-mini-btn" type="button" title="Свернуть">▭</button>
       <div class="call-header-text">
         <div id="call-title" class="call-title">📞 Звонок</div>
         <div id="call-status" class="call-status">на связи</div>
@@ -255,6 +256,13 @@
       <button id="cam-toggle" class="icon-btn" type="button" title="Камера">📹</button>
     </div>
   </section>
+
+  <!-- Mini call widget (shown when call is minimized) -->
+  <button id="call-mini-widget" class="call-mini-widget" type="button" hidden title="Развернуть звонок">
+    <span id="call-mini-pulse" class="call-mini-pulse">📞</span>
+    <span id="call-mini-text" class="call-mini-text">на связи</span>
+    <span id="call-mini-hangup" class="call-mini-hangup" title="Сбросить">📵</span>
+  </button>
 
   <script type="module" src="./app.js"></script>
 </body>
