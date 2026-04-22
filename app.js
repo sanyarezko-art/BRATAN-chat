@@ -187,34 +187,51 @@ function saveChatIndex() {
 // don't keep the raw bytes around.
 const MESSAGES_SAVE_LIMIT = 200;
 const _saveMessagesTimers = new Map();
+
+function _serializeMessages(sess) {
+  return sess.messages
+    .filter((m) => m && (m.kind === "text" || m.kind === "sys"))
+    .slice(-MESSAGES_SAVE_LIMIT)
+    .map((m) => ({
+      id: m.id,
+      from: m.from,
+      nick: m.nick,
+      ts: m.ts,
+      self: !!m.self,
+      kind: m.kind,
+      text: m.text || "",
+    }));
+}
+
+function _flushMessagesForSession(sess) {
+  try {
+    localStorage.setItem(
+      MESSAGES_KEY_PREFIX + sess.id,
+      JSON.stringify(_serializeMessages(sess)),
+    );
+  } catch (e) {
+    console.warn("flushMessagesForSession failed", e);
+  }
+}
+
 function saveMessagesForSession(sess) {
   if (!sess) return;
   const prev = _saveMessagesTimers.get(sess.id);
   if (prev) clearTimeout(prev);
   const t = setTimeout(() => {
     _saveMessagesTimers.delete(sess.id);
-    try {
-      const persistable = sess.messages
-        .filter((m) => m && (m.kind === "text" || m.kind === "sys"))
-        .slice(-MESSAGES_SAVE_LIMIT)
-        .map((m) => ({
-          id: m.id,
-          from: m.from,
-          nick: m.nick,
-          ts: m.ts,
-          self: !!m.self,
-          kind: m.kind,
-          text: m.text || "",
-        }));
-      localStorage.setItem(
-        MESSAGES_KEY_PREFIX + sess.id,
-        JSON.stringify(persistable),
-      );
-    } catch (e) {
-      console.warn("saveMessagesForSession failed", e);
-    }
+    _flushMessagesForSession(sess);
   }, 400);
   _saveMessagesTimers.set(sess.id, t);
+}
+
+function flushAllPendingMessageSaves() {
+  for (const [sessId, t] of _saveMessagesTimers) {
+    clearTimeout(t);
+    const sess = state.chats.get(sessId);
+    if (sess) _flushMessagesForSession(sess);
+  }
+  _saveMessagesTimers.clear();
 }
 
 function loadMessagesForSession(sess) {
@@ -1765,6 +1782,9 @@ async function bootApp() {
         createdAt: c.createdAt || Date.now(),
       });
       state.chats.set(id, sess);
+      // Load persisted text/system messages BEFORE the session joins trystero
+      // so they are visible immediately when the chat opens.
+      loadMessagesForSession(sess);
     } catch (e) {
       console.warn("skip invalid saved chat", e);
     }
@@ -1824,15 +1844,35 @@ function scheduleReconnectIfStale(reason) {
   }
 }
 
-window.addEventListener("pagehide", beaconStopAll, {capture: true});
+window.addEventListener(
+  "pagehide",
+  () => {
+    // Flush pending message saves synchronously — otherwise the 400 ms
+    // debounce can drop the latest messages if the user reloads fast.
+    flushAllPendingMessageSaves();
+    beaconStopAll();
+  },
+  {capture: true},
+);
 // `beforeunload` is a belt-and-suspenders for browsers where pagehide is
 // skipped (rare, mostly Safari desktop with specific back-forward-cache
-// states). beaconStopAll is idempotent.
-window.addEventListener("beforeunload", beaconStopAll, {capture: true});
+// states). Both handlers are idempotent.
+window.addEventListener(
+  "beforeunload",
+  () => {
+    flushAllPendingMessageSaves();
+    beaconStopAll();
+  },
+  {capture: true},
+);
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     scheduleReconnectIfStale("visible");
+  } else {
+    // When the tab is backgrounded (mobile home button, screen off),
+    // force-flush pending saves. iOS Safari will kill us shortly.
+    flushAllPendingMessageSaves();
   }
 });
 
