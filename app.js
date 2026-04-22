@@ -1155,6 +1155,88 @@ function maybePlayDing(sess) {
   playDing();
 }
 
+// --- media permissions ------------------------------------------------------
+// iOS/Android PWAs don't always inherit permissions granted to the browser.
+// Expose an explicit button so the user can trigger the native prompt from
+// settings, and surface actionable feedback instead of a silent failure.
+
+async function checkPermission(kind) {
+  const status = document.getElementById("perm-status");
+  if (status) {
+    status.textContent =
+      kind === "audio" ? "🎤 запрашиваю микрофон…" : "📹 запрашиваю камеру…";
+    status.style.color = "";
+  }
+  try {
+    const s = await navigator.mediaDevices.getUserMedia(
+      kind === "audio" ? {audio: true} : {audio: false, video: true},
+    );
+    s.getTracks().forEach((t) => t.stop());
+    if (status) {
+      status.textContent =
+        kind === "audio"
+          ? "✅ микрофон разрешён"
+          : "✅ камера разрешена";
+      status.style.color = "#8affb7";
+    }
+  } catch (e) {
+    const msg = explainMediaError(e, kind);
+    if (status) {
+      status.textContent = msg;
+      status.style.color = "#ff8a8a";
+    } else {
+      alert(msg);
+    }
+  }
+}
+
+function explainMediaError(e, kind) {
+  const name = (e && (e.name || e.code)) || "";
+  const thing = kind === "video" ? "камере" : "микрофону";
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return (
+      `❌ доступ к ${thing} запрещён. Открой настройки системы: ` +
+      `Android → «Приложения → BRATAN → Разрешения», ` +
+      `iOS → «Настройки → Safari → Микрофон/Камера», и разреши.`
+    );
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return `❌ устройство не найдено (нет ${kind === "video" ? "камеры" : "микрофона"}).`;
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return `❌ устройство занято другим приложением. Закрой другие звонилки и попробуй снова.`;
+  }
+  return `❌ ошибка: ${e && (e.message || e.name)}`;
+}
+
+// --- wake lock --------------------------------------------------------------
+// Hold a screen Wake Lock while a call is active so the phone doesn't sleep
+// mid-conversation. The browser auto-releases on tab blur — re-acquire on
+// visibilitychange. Silently no-op on browsers without the API (iOS < 16.4).
+
+let _wakeLock = null;
+
+async function acquireWakeLock() {
+  if (_wakeLock) return;
+  if (!("wakeLock" in navigator)) return;
+  try {
+    _wakeLock = await navigator.wakeLock.request("screen");
+    _wakeLock.addEventListener?.("release", () => {
+      _wakeLock = null;
+    });
+  } catch (e) {
+    console.warn("wakeLock request failed", e);
+  }
+}
+
+function releaseWakeLock() {
+  if (!_wakeLock) return;
+  try {
+    _wakeLock.release();
+  } catch {}
+  _wakeLock = null;
+}
+
 // --- voice/video calls ------------------------------------------------------
 
 async function startCall(sess, kind) {
@@ -1174,11 +1256,7 @@ async function startCall(sess, kind) {
     });
   } catch (e) {
     console.error("getUserMedia failed", e);
-    alert(
-      "Не удалось получить микрофон/камеру: " +
-        (e.message || e.name || String(e)) +
-        "\n\nРазреши доступ в настройках браузера.",
-    );
+    alert(explainMediaError(e, kind === "video" ? "video" : "audio"));
     return;
   }
   state.activeCall = {
@@ -1195,6 +1273,7 @@ async function startCall(sess, kind) {
   sess.addStream(localStream);
   openCallOverlay(sess, {ringing: true});
   applyPendingRemoteStreams(sess);
+  acquireWakeLock();
 }
 
 function acceptIncomingCall() {
@@ -1213,10 +1292,7 @@ function acceptIncomingCall() {
       });
     } catch (e) {
       console.error("getUserMedia failed", e);
-      alert(
-        "Не получилось включить микрофон/камеру: " +
-          (e.message || e.name || String(e)),
-      );
+      alert(explainMediaError(e, pending.kind === "video" ? "video" : "audio"));
       sess.sendCall({type: "reject"}, pending.peerId);
       return;
     }
@@ -1234,6 +1310,7 @@ function acceptIncomingCall() {
     // The caller may have started pushing their stream BEFORE we accepted.
     // Flush any buffered inbound streams so we actually see/hear them.
     applyPendingRemoteStreams(sess);
+    acquireWakeLock();
   })();
 }
 
@@ -1262,6 +1339,7 @@ function endCall({silent} = {}) {
   if (sess) sess.pendingRemoteStreams.clear();
   if (sess && !silent) sess.sendCall({type: "end"});
   closeCallOverlay();
+  releaseWakeLock();
 }
 
 function handleCallSignal(sess, peerId, payload) {
@@ -1697,6 +1775,24 @@ function wireEvents() {
     // Play a test ding so the user hears it immediately if turned on.
     if (state.sound) playDing();
   });
+  $("check-mic").addEventListener("click", () => checkPermission("audio"));
+  $("check-cam").addEventListener("click", () => checkPermission("video"));
+  $("reconnect-chat").addEventListener("click", async () => {
+    const sess = state.activeId && state.chats.get(state.activeId);
+    if (!sess) return;
+    const btn = $("reconnect-chat");
+    btn.disabled = true;
+    btn.textContent = "⏳";
+    pushSystem(sess, "🔄 Переподключаюсь…");
+    try {
+      await restartSession(sess);
+    } finally {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = "🔄";
+      }, 1500);
+    }
+  });
   $("save-nick").addEventListener("click", () => {
     const n = $("settings-nick").value.trim().slice(0, 32);
     if (!n) return;
@@ -1834,10 +1930,16 @@ function scheduleReconnectIfStale(reason) {
       restartSession(sess);
       continue;
     }
-    if (sessionPeerCount(sess) === 0 && sess.searchingSince) {
+    if (sessionPeerCount(sess) === 0) {
+      // If we came back to a visible/online state with zero peers, always
+      // restart — even if `searchingSince` was cleared by a stale peer-join
+      // event. Arm the timestamp first so the watchdog can reason about it.
+      if (!sess.searchingSince) sess.searchingSince = Date.now();
       const waited = Date.now() - sess.searchingSince;
-      if (waited > 20000) {
-        console.info(`[reconnect] ${reason}: ${sess.id.slice(0, 8)} alone for ${waited}ms, rejoin`);
+      if (reason === "visible" || reason === "online" || waited > 20000) {
+        console.info(
+          `[reconnect] ${reason}: ${sess.id.slice(0, 8)} alone for ${waited}ms, rejoin`,
+        );
         restartSession(sess);
       }
     }
@@ -1869,6 +1971,9 @@ window.addEventListener(
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     scheduleReconnectIfStale("visible");
+    // Browsers auto-release the Wake Lock on tab blur — re-acquire if a
+    // call is still running so the screen doesn't sleep mid-conversation.
+    if (state.activeCall) acquireWakeLock();
   } else {
     // When the tab is backgrounded (mobile home button, screen off),
     // force-flush pending saves. iOS Safari will kill us shortly.

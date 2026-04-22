@@ -94,6 +94,7 @@
           <div class="chat-actions">
             <button id="call-audio" type="button" class="icon-btn" title="Аудио-звонок">📞</button>
             <button id="call-video" type="button" class="icon-btn" title="Видео-звонок">📹</button>
+            <button id="reconnect-chat" type="button" class="icon-btn" title="Переподключиться">🔄</button>
             <button id="copy-invite-2" type="button" class="icon-btn" title="Скопировать ссылку">🔗</button>
             <button id="rename-chat" type="button" class="icon-btn" title="Переименовать">✏️</button>
             <button id="leave-chat" type="button" class="icon-btn" title="Удалить чат">🗑️</button>
@@ -206,6 +207,17 @@
           <input id="sound-toggle" type="checkbox" />
           <span>🔔 Звук нового сообщения</span>
         </label>
+        <div class="divider"><span>разрешения</span></div>
+        <p class="fine" style="text-align:left">
+          Для звонков нужен доступ к микрофону и камере. На некоторых Android и iOS приложение не всегда наследует разрешения от браузера — тогда жми сюда и подтверждай в системном окне. Если уже отказал раньше, открой настройки приложения вручную: Android → «Приложения → BRATAN → Разрешения», iOS → «Настройки → Safari/BRATAN → Микрофон/Камера».
+        </p>
+        <button id="check-mic" class="primary" type="button">
+          🎤 Проверить микрофон
+        </button>
+        <button id="check-cam" class="primary" type="button" style="margin-top:8px">
+          📹 Проверить камеру
+        </button>
+        <div id="perm-status" class="fine" style="text-align:left;margin-top:8px"></div>
         <div class="divider"><span>анонимность</span></div>
         <p class="fine" style="text-align:left">
           Список чатов и секреты-ключи хранятся только в <code>localStorage</code> твоего браузера. На сервер ничего не уходит. Кнопка ниже удалит всё: ключи, ник, список чатов.
