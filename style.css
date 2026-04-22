@@ -845,6 +845,70 @@ button.danger:hover { background: rgba(255, 107, 107, 0.25); }
   box-shadow: 0 6px 20px rgba(255,59,78,0.5);
 }
 .call-hangup-top:hover { background: #ff1f35; }
+.call-mini-btn {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.2);
+  font-size: 18px;
+}
+.call-mini-btn:hover { background: rgba(255,255,255,0.2); }
+
+/* Mini call widget (shown when the call overlay is minimized) */
+.call-mini-widget {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 150;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #6a00f4 0%, #ff3b6b 100%);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.25);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4), 0 0 0 4px rgba(255,255,255,0.05);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  animation: call-mini-pop 0.18s ease-out;
+}
+.call-mini-widget[hidden] { display: none !important; }
+.call-mini-widget:hover { filter: brightness(1.1); }
+.call-mini-pulse {
+  font-size: 18px;
+  animation: call-mini-pulse 1.4s ease-in-out infinite;
+}
+.call-mini-text {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.call-mini-hangup {
+  margin-left: 4px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.35);
+  font-size: 15px;
+}
+.call-mini-hangup:hover { background: rgba(0,0,0,0.55); }
+@keyframes call-mini-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.6; transform: scale(1.15); }
+}
+@keyframes call-mini-pop {
+  from { transform: translateY(12px) scale(0.95); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
 .call-title {
   font-weight: 600;
   font-size: 16px;
@@ -979,6 +1043,10 @@ button.danger:hover { background: rgba(255, 107, 107, 0.25); }
 
 body.call-open {
   overflow: hidden;
+}
+/* When call is minimized, the overlay is hidden and the chat should scroll. */
+body.call-open.call-minimized {
+  overflow: auto;
 }
 
 @media (max-width: 720px) {

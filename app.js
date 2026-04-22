@@ -30,6 +30,7 @@ const APP_ID = "bratan-chat/v1";
 const ROOM_SALT = "bratan-chat/room/v1";
 const PASSWORD_SALT = "bratan-chat/password/v1";
 const STORAGE_KEY = "bratan.chats.v1";
+const MESSAGES_KEY_PREFIX = "bratan.msgs.v1.";
 const NICK_KEY = "bratan.nick";
 const SOUND_KEY = "bratan.sound";
 
@@ -179,6 +180,63 @@ function saveChatIndex() {
     createdAt: c.createdAt,
   }));
   localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+}
+
+// Persist only lightweight text / system messages per chat. Media messages are
+// skipped because the underlying blob URL does not survive a reload and we
+// don't keep the raw bytes around.
+const MESSAGES_SAVE_LIMIT = 200;
+const _saveMessagesTimers = new Map();
+function saveMessagesForSession(sess) {
+  if (!sess) return;
+  const prev = _saveMessagesTimers.get(sess.id);
+  if (prev) clearTimeout(prev);
+  const t = setTimeout(() => {
+    _saveMessagesTimers.delete(sess.id);
+    try {
+      const persistable = sess.messages
+        .filter((m) => m && (m.kind === "text" || m.kind === "sys"))
+        .slice(-MESSAGES_SAVE_LIMIT)
+        .map((m) => ({
+          id: m.id,
+          from: m.from,
+          nick: m.nick,
+          ts: m.ts,
+          self: !!m.self,
+          kind: m.kind,
+          text: m.text || "",
+        }));
+      localStorage.setItem(
+        MESSAGES_KEY_PREFIX + sess.id,
+        JSON.stringify(persistable),
+      );
+    } catch (e) {
+      console.warn("saveMessagesForSession failed", e);
+    }
+  }, 400);
+  _saveMessagesTimers.set(sess.id, t);
+}
+
+function loadMessagesForSession(sess) {
+  try {
+    const raw = localStorage.getItem(MESSAGES_KEY_PREFIX + sess.id);
+    if (!raw) return;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return;
+    for (const m of arr) {
+      if (!m || (m.kind !== "text" && m.kind !== "sys")) continue;
+      sess.messages.push(m);
+      if (m.id) sess.seenMsgs.add(`t:${m.from}|${m.ts}|${m.text}`);
+    }
+  } catch (e) {
+    console.warn("loadMessagesForSession failed", e);
+  }
+}
+
+function removeMessagesForSession(sessId) {
+  try {
+    localStorage.removeItem(MESSAGES_KEY_PREFIX + sessId);
+  } catch {}
 }
 
 // --- ChatSession ------------------------------------------------------------
@@ -458,6 +516,7 @@ function pushMessage(sess, msg) {
     renderMessageAppend(sess, msg);
   }
   renderSidebar();
+  saveMessagesForSession(sess);
 }
 
 function pushSystem(sess, text) {
@@ -470,6 +529,7 @@ function pushSystem(sess, text) {
   if (sess.id === state.activeId) {
     renderMessageAppend(sess, sess.messages[sess.messages.length - 1]);
   }
+  saveMessagesForSession(sess);
 }
 
 async function createChatFromSecret(secretStr, secretBytes, {name} = {}) {
@@ -488,6 +548,7 @@ async function createChatFromSecret(secretStr, secretBytes, {name} = {}) {
     createdAt: Date.now(),
   });
   state.chats.set(id, sess);
+  loadMessagesForSession(sess);
   saveChatIndex();
   await startSession(sess);
   return sess;
@@ -498,6 +559,7 @@ async function removeChat(id) {
   if (!sess) return;
   await stopSession(sess);
   state.chats.delete(id);
+  removeMessagesForSession(id);
   saveChatIndex();
   if (state.activeId === id) {
     setActiveChat(null);
@@ -1215,6 +1277,37 @@ function ringLoop(on) {
   }
 }
 
+function setCallMinimized(minimized) {
+  const call = state.activeCall;
+  if (!call) return;
+  call.minimized = !!minimized;
+  document.body.classList.toggle("call-minimized", call.minimized);
+  const overlay = $("call-overlay");
+  const widget = $("call-mini-widget");
+  overlay.hidden = call.minimized;
+  widget.hidden = !call.minimized;
+  if (call.minimized) renderCallMiniWidget();
+}
+
+function renderCallMiniWidget() {
+  const call = state.activeCall;
+  if (!call) return;
+  const txt = $("call-mini-text");
+  const sess = state.chats.get(call.sessId);
+  const peers = sess ? [...sess.peerNames.entries()] : [];
+  const nick = peers.length
+    ? peers[0][1] || peers[0][0].slice(0, 6)
+    : "братан";
+  if (call.ringing) {
+    txt.textContent = `${nick} · вызываю…`;
+  } else if (call.remoteStreams.size === 0) {
+    txt.textContent = `${nick} · соединяемся…`;
+  } else {
+    const icon = call.kind === "video" ? "📹" : "📞";
+    txt.textContent = `${icon} ${nick}`;
+  }
+}
+
 function openCallOverlay(sess, {ringing}) {
   const overlay = $("call-overlay");
   overlay.hidden = false;
@@ -1238,7 +1331,10 @@ function closeCallOverlay() {
   ringLoop(false);
   const overlay = $("call-overlay");
   overlay.hidden = true;
+  const widget = $("call-mini-widget");
+  if (widget) widget.hidden = true;
   document.body.classList.remove("call-open");
+  document.body.classList.remove("call-minimized");
   const localVideo = $("local-video");
   try { localVideo.srcObject = null; } catch {}
   const grid = $("remote-grid");
@@ -1257,6 +1353,7 @@ function renderCallStatus() {
   } else {
     status.textContent = "на связи";
   }
+  if (state.activeCall.minimized) renderCallMiniWidget();
 }
 
 function renderCallRemotes() {
@@ -1265,6 +1362,7 @@ function renderCallRemotes() {
   grid.innerHTML = "";
   const call = state.activeCall;
   if (!call) return;
+  if (call.minimized) renderCallMiniWidget();
   for (const [peerId, stream] of call.remoteStreams) {
     const sess = state.chats.get(call.sessId);
     const nick = sess?.peerNames.get(peerId) || peerId.slice(0, 6);
@@ -1446,6 +1544,16 @@ function wireEvents() {
   });
   $("hang-up").addEventListener("click", () => endCall({}));
   $("hang-up-top").addEventListener("click", () => endCall({}));
+  $("call-minimize").addEventListener("click", () => setCallMinimized(true));
+  $("call-mini-widget").addEventListener("click", (ev) => {
+    // Clicking the red X on the widget hangs up instead of restoring.
+    if (ev.target && ev.target.id === "call-mini-hangup") {
+      ev.stopPropagation();
+      endCall({});
+      return;
+    }
+    setCallMinimized(false);
+  });
   $("mic-toggle").addEventListener("click", toggleMic);
   $("cam-toggle").addEventListener("click", toggleCam);
   $("accept-call").addEventListener("click", acceptIncomingCall);
@@ -1476,6 +1584,7 @@ function wireEvents() {
     sess.messages.push(ownMsg);
     renderMessageAppend(sess, ownMsg);
     renderSidebar();
+    saveMessagesForSession(sess);
     input.value = "";
   });
 
@@ -1484,6 +1593,22 @@ function wireEvents() {
     const file = ev.target.files?.[0];
     ev.target.value = "";
     if (file) await handleFilePick(file);
+  });
+
+  // Ctrl+V / Cmd+V into the message input pastes clipboard images as GIF.
+  $("message-input").addEventListener("paste", async (ev) => {
+    const items = ev.clipboardData?.items;
+    if (!items || !items.length) return;
+    for (const item of items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          ev.preventDefault();
+          await handleFilePick(file);
+          return;
+        }
+      }
+    }
   });
   $("media-cancel").addEventListener("click", () => {
     state.pendingMediaJob?.cancel();
@@ -1521,12 +1646,18 @@ function wireEvents() {
     if (!confirm("Стереть все чаты, ключи и ник? Это неотменяемо.")) return;
     for (const sess of [...state.chats.values()]) {
       await stopSession(sess);
+      removeMessagesForSession(sess.id);
     }
     state.chats.clear();
     state.activeId = null;
     state.nick = "";
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(NICK_KEY);
+    // Also clean up any orphaned message keys.
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(MESSAGES_KEY_PREFIX)) localStorage.removeItem(k);
+    }
     location.reload();
   });
 
