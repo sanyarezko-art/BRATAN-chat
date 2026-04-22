@@ -22,6 +22,7 @@
 //     доступ к чатам. В настройках есть кнопка "стереть всё".
 
 import {joinRoom as joinNostr, selfId} from "https://esm.sh/@trystero-p2p/nostr@0.23.1";
+import {joinRoom as joinMqtt} from "https://esm.sh/@trystero-p2p/mqtt@0.23.1";
 import {joinRoom as joinTorrent} from "https://esm.sh/@trystero-p2p/torrent@0.23.1";
 import {GIFEncoder, quantize, applyPalette} from "https://cdn.jsdelivr.net/npm/gifenc@1.0.3/+esm";
 
@@ -30,6 +31,7 @@ const ROOM_SALT = "bratan-chat/room/v1";
 const PASSWORD_SALT = "bratan-chat/password/v1";
 const STORAGE_KEY = "bratan.chats.v1";
 const NICK_KEY = "bratan.nick";
+const SOUND_KEY = "bratan.sound";
 
 const MEDIA_MAX_WIDTH = 320;
 const MEDIA_MAX_DURATION_SEC = 5;
@@ -143,6 +145,11 @@ const state = {
   activeId: null,
   nick: localStorage.getItem(NICK_KEY) || "",
   pendingMediaJob: null, // {cancel}
+  sound: localStorage.getItem(SOUND_KEY) !== "0",
+  // active call = {sessId, kind: 'audio'|'video', localStream, remoteStreams: Map<peerId, MediaStream>, incoming?: true}
+  activeCall: null,
+  // Pending incoming call prompt (before accept): {sessId, peerId, kind}
+  pendingInvite: null,
 };
 
 // --- persistence ------------------------------------------------------------
@@ -184,10 +191,13 @@ function createSession({id, secretStr, secretBytes, password, name, createdAt}) 
     password,
     name: name || "",
     createdAt: createdAt || Date.now(),
-    rooms: [], // Trystero rooms from both strategies
+    rooms: [], // Trystero rooms from each strategy
     sendMsg: null,
     sendMedia: null,
     sendNick: null,
+    sendCall: null, // signaling action for call events
+    addStream: null, // (stream, targetPeerIds?) -> void, broadcast to all rooms
+    removeStream: null, // (stream, targetPeerIds?) -> void
     peerNames: new Map(), // peerId -> nick
     messages: [], // {id, from, nick, ts, self, kind: 'text'|'media', text?, media?, state?}
     unread: 0,
@@ -198,13 +208,18 @@ function createSession({id, secretStr, secretBytes, password, name, createdAt}) 
 }
 
 async function startSession(sess) {
+  // Order matters for the FIRST chunk to arrive: nostr is usually fastest to
+  // rendez-vous, mqtt right after, torrent is slow but survives if the rest
+  // are blocked. All three run in parallel and share peers via dedup.
   const strategies = [
     {name: "nostr", join: joinNostr},
+    {name: "mqtt", join: joinMqtt},
     {name: "torrent", join: joinTorrent},
   ];
   const sendMsgFns = [];
   const sendMediaFns = [];
   const sendNickFns = [];
+  const sendCallFns = [];
 
   for (const {join} of strategies) {
     let room;
@@ -219,9 +234,11 @@ async function startSession(sess) {
     const [sendMsg, getMsg] = room.makeAction("msg");
     const [sendMedia, getMedia, onMediaProgress] = room.makeAction("media");
     const [sendNick, getNick] = room.makeAction("nick");
+    const [sendCall, getCall] = room.makeAction("call");
     sendMsgFns.push(sendMsg);
     sendMediaFns.push(sendMedia);
     sendNickFns.push(sendNick);
+    sendCallFns.push(sendCall);
 
     room.onPeerJoin((peerId) => {
       if (!sess.peerNames.has(peerId)) {
@@ -287,17 +304,25 @@ async function startSession(sess) {
         kind: "text",
         text,
       });
+      maybePlayDing(sess);
     });
 
-    getMedia((payload, peerId) => {
-      if (!payload || typeof payload !== "object") return;
-      const bytes = payload.bytes;
-      if (!(bytes instanceof Uint8Array)) return;
-      const mime = String(payload.mime || "image/gif");
-      const ts = Number(payload.ts) || Date.now();
-      const mediaId = String(payload.mediaId || "") || randomId();
-      const w = Math.max(1, Math.min(2048, Number(payload.w) || 320));
-      const h = Math.max(1, Math.min(2048, Number(payload.h) || 320));
+    // Media is sent as top-level binary with metadata alongside. This is the
+    // correct Trystero pattern for binary payloads — nesting a Uint8Array
+    // inside a plain object would get JSON-stringified and lost.
+    getMedia((data, peerId, meta) => {
+      const bytes =
+        data instanceof Uint8Array
+          ? data
+          : data instanceof ArrayBuffer
+          ? new Uint8Array(data)
+          : null;
+      if (!bytes || !bytes.byteLength) return;
+      const mime = String(meta?.mime || "image/gif");
+      const ts = Number(meta?.ts) || Date.now();
+      const mediaId = String(meta?.mediaId || "") || randomId();
+      const w = Math.max(1, Math.min(4096, Number(meta?.w) || 320));
+      const h = Math.max(1, Math.min(4096, Number(meta?.h) || 320));
       const dedupKey = `m:${peerId}|${mediaId}`;
       if (sess.seenMsgs.has(dedupKey)) return;
       sess.seenMsgs.add(dedupKey);
@@ -314,8 +339,18 @@ async function startSession(sess) {
         ts,
         self: false,
         kind: "media",
-        media: {url, mime, w, h, size: bytes.length},
+        media: {url, mime, w, h, size: bytes.byteLength},
       });
+      maybePlayDing(sess);
+    });
+
+    getCall((payload, peerId) => {
+      if (!payload || typeof payload !== "object") return;
+      handleCallSignal(sess, peerId, payload);
+    });
+
+    room.onPeerStream?.((stream, peerId) => {
+      attachRemoteStream(sess, peerId, stream);
     });
 
     if (onMediaProgress) {
@@ -326,6 +361,9 @@ async function startSession(sess) {
     }
   }
 
+  // Also dedupe text-message sounds triggered inside getMsg.
+  // (moved the maybePlayDing call to getMsg just below.)
+
   sess.sendMsg = (payload) => {
     for (const fn of sendMsgFns) {
       try {
@@ -333,11 +371,13 @@ async function startSession(sess) {
       } catch {}
     }
   };
-  sess.sendMedia = async (payload, onProgress) => {
+  // Binary bytes go as top-level data, meta travels alongside.
+  sess.sendMedia = async (bytes, meta, onProgress) => {
     const promises = sendMediaFns.map((fn) => {
       try {
-        return fn(payload, null, null, onProgress);
+        return fn(bytes, null, meta, onProgress);
       } catch (e) {
+        console.warn("sendMedia failed", e);
         return Promise.resolve();
       }
     });
@@ -350,6 +390,30 @@ async function startSession(sess) {
       } catch {}
     }
   };
+  sess.sendCall = (payload, peerId) => {
+    for (const fn of sendCallFns) {
+      try {
+        if (peerId) fn(payload, peerId);
+        else fn(payload);
+      } catch {}
+    }
+  };
+  sess.addStream = (stream, targetPeerIds) => {
+    for (const r of sess.rooms) {
+      try {
+        r.addStream?.(stream, targetPeerIds ?? null);
+      } catch (e) {
+        console.warn("addStream failed", e);
+      }
+    }
+  };
+  sess.removeStream = (stream, targetPeerIds) => {
+    for (const r of sess.rooms) {
+      try {
+        r.removeStream?.(stream, targetPeerIds ?? null);
+      } catch {}
+    }
+  };
 
   sess.searchingSince = Date.now();
   renderChatIfActive(sess);
@@ -357,6 +421,9 @@ async function startSession(sess) {
 }
 
 async function stopSession(sess) {
+  if (state.activeCall && state.activeCall.sessId === sess.id) {
+    endCall({silent: true});
+  }
   for (const r of sess.rooms) {
     try {
       await r.leave();
@@ -868,15 +935,11 @@ async function handleFilePick(file) {
     if (sess.id === state.activeId) renderMessageAppend(sess, ownMsg);
     renderSidebar();
 
+    // Send bytes as top-level binary; meta travels alongside. Nesting the
+    // Uint8Array inside a JSON object would get stringified and lost.
     await sess.sendMedia(
-      {
-        mediaId,
-        bytes: result.bytes,
-        mime: result.mime,
-        w: result.w,
-        h: result.h,
-        ts,
-      },
+      result.bytes,
+      {mediaId, mime: result.mime, w: result.w, h: result.h, ts},
       (percent) => {
         progressFill.style.width = `${Math.round(percent * 100)}%`;
       },
@@ -884,8 +947,9 @@ async function handleFilePick(file) {
     ownMsg.state = "sent";
     if (sess.id === state.activeId) renderChatPane(sess);
   } catch (err) {
-    console.error(err);
-    alert("Не вышло отправить медиа: " + err.message);
+    console.error("media upload failed:", err);
+    const msg = err && err.message ? err.message : String(err);
+    alert("Не вышло отправить медиа: " + msg + "\n\nПодробности в консоли браузера.");
   } finally {
     progressEl.hidden = true;
     state.pendingMediaJob = null;
@@ -901,6 +965,322 @@ function openLightbox(url) {
 function closeLightbox() {
   $("lightbox").hidden = true;
   $("lightbox-img").src = "";
+}
+
+// --- notification sound -----------------------------------------------------
+
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+  }
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume().catch(() => {});
+  }
+  return audioCtx;
+}
+
+function playDing() {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    // Two quick notes: 880Hz then 1320Hz, short decay. Feels like a soft chime.
+    const notes = [
+      {f: 880, t: 0, d: 0.18},
+      {f: 1320, t: 0.08, d: 0.22},
+    ];
+    for (const n of notes) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(n.f, now + n.t);
+      gain.gain.setValueAtTime(0.0001, now + n.t);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + n.t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + n.t + n.d);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + n.t);
+      osc.stop(now + n.t + n.d + 0.02);
+    }
+  } catch (e) {
+    // audio ctx may be blocked before first user gesture; ignore
+  }
+}
+
+function maybePlayDing(sess) {
+  if (!state.sound) return;
+  // If window is focused AND this chat is active AND we're near bottom —
+  // the user clearly sees the message, no need for audio.
+  const visible =
+    document.hasFocus() &&
+    sess.id === state.activeId &&
+    isNearBottom(scrollEl());
+  if (visible) return;
+  playDing();
+}
+
+// --- voice/video calls ------------------------------------------------------
+
+async function startCall(sess, kind) {
+  if (state.activeCall) {
+    alert("Звонок уже активен — сначала заверши текущий.");
+    return;
+  }
+  if (sess.peerNames.size === 0) {
+    alert("Некому звонить — ждём братанов.");
+    return;
+  }
+  let localStream;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: kind === "video",
+    });
+  } catch (e) {
+    console.error("getUserMedia failed", e);
+    alert(
+      "Не удалось получить микрофон/камеру: " +
+        (e.message || e.name || String(e)) +
+        "\n\nРазреши доступ в настройках браузера.",
+    );
+    return;
+  }
+  state.activeCall = {
+    sessId: sess.id,
+    kind,
+    localStream,
+    remoteStreams: new Map(),
+    startedAt: Date.now(),
+    ringing: true,
+  };
+  // Announce to peers so they see the ringing prompt.
+  sess.sendCall({type: "offer", kind, ts: Date.now()});
+  // Attach stream to all rooms.
+  sess.addStream(localStream);
+  openCallOverlay(sess, {ringing: true});
+}
+
+function acceptIncomingCall() {
+  const pending = state.pendingInvite;
+  if (!pending) return;
+  const sess = state.chats.get(pending.sessId);
+  if (!sess) return;
+  state.pendingInvite = null;
+  closeModal("incoming-call-modal");
+  (async () => {
+    let localStream;
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: pending.kind === "video",
+      });
+    } catch (e) {
+      console.error("getUserMedia failed", e);
+      alert(
+        "Не получилось включить микрофон/камеру: " +
+          (e.message || e.name || String(e)),
+      );
+      sess.sendCall({type: "reject"}, pending.peerId);
+      return;
+    }
+    state.activeCall = {
+      sessId: sess.id,
+      kind: pending.kind,
+      localStream,
+      remoteStreams: new Map(),
+      startedAt: Date.now(),
+      ringing: false,
+    };
+    sess.addStream(localStream);
+    sess.sendCall({type: "accept", ts: Date.now()}, pending.peerId);
+    openCallOverlay(sess, {ringing: false});
+  })();
+}
+
+function rejectIncomingCall() {
+  const pending = state.pendingInvite;
+  if (!pending) return;
+  const sess = state.chats.get(pending.sessId);
+  state.pendingInvite = null;
+  closeModal("incoming-call-modal");
+  if (sess) sess.sendCall({type: "reject"}, pending.peerId);
+}
+
+function endCall({silent} = {}) {
+  const call = state.activeCall;
+  if (!call) return;
+  const sess = state.chats.get(call.sessId);
+  try {
+    if (call.localStream) {
+      for (const t of call.localStream.getTracks()) {
+        try { t.stop(); } catch {}
+      }
+      if (sess) sess.removeStream(call.localStream);
+    }
+  } catch {}
+  state.activeCall = null;
+  if (sess && !silent) sess.sendCall({type: "end"});
+  closeCallOverlay();
+}
+
+function handleCallSignal(sess, peerId, payload) {
+  const type = String(payload.type || "");
+  if (type === "offer") {
+    const kind = payload.kind === "video" ? "video" : "audio";
+    // Already have an active call to this session? If it's the outgoing caller
+    // glare (both sides pressed call at the same time) — just accept the newer.
+    if (state.activeCall) return;
+    state.pendingInvite = {sessId: sess.id, peerId, kind};
+    const nick = sess.peerNames.get(peerId) || peerId.slice(0, 6);
+    $("incoming-call-nick").textContent = nick;
+    $("incoming-call-kind").textContent =
+      kind === "video" ? "📹 видео-звонок" : "📞 аудио-звонок";
+    openModal("incoming-call-modal");
+    // Ring tone loop
+    ringLoop(true);
+  } else if (type === "accept") {
+    if (state.activeCall && state.activeCall.sessId === sess.id) {
+      state.activeCall.ringing = false;
+      renderCallStatus();
+    }
+  } else if (type === "reject") {
+    if (state.activeCall && state.activeCall.sessId === sess.id) {
+      pushSystem(sess, `📞 ${sess.peerNames.get(peerId) || peerId.slice(0, 6)} отклонил звонок`);
+      endCall({silent: true});
+    }
+  } else if (type === "end") {
+    if (state.activeCall && state.activeCall.sessId === sess.id) {
+      endCall({silent: true});
+    }
+    if (state.pendingInvite && state.pendingInvite.sessId === sess.id) {
+      state.pendingInvite = null;
+      closeModal("incoming-call-modal");
+      ringLoop(false);
+    }
+  }
+}
+
+function attachRemoteStream(sess, peerId, stream) {
+  const call = state.activeCall;
+  if (!call || call.sessId !== sess.id) return;
+  call.remoteStreams.set(peerId, stream);
+  call.ringing = false;
+  ringLoop(false);
+  renderCallRemotes();
+}
+
+// --- call UI ----------------------------------------------------------------
+
+let ringInterval = null;
+function ringLoop(on) {
+  if (on) {
+    if (ringInterval) return;
+    if (state.sound) playDing();
+    ringInterval = setInterval(() => {
+      if (state.sound) playDing();
+    }, 1600);
+  } else {
+    if (ringInterval) {
+      clearInterval(ringInterval);
+      ringInterval = null;
+    }
+  }
+}
+
+function openCallOverlay(sess, {ringing}) {
+  const overlay = $("call-overlay");
+  overlay.hidden = false;
+  document.body.classList.add("call-open");
+  $("call-title").textContent =
+    (state.activeCall.kind === "video" ? "📹 Видео" : "📞 Аудио") +
+    " · " +
+    (sess.name || "BRATAN-chat");
+  const localVideo = $("local-video");
+  localVideo.srcObject = state.activeCall.localStream;
+  localVideo.muted = true;
+  localVideo.playsInline = true;
+  localVideo.play?.().catch(() => {});
+  state.activeCall.ringing = !!ringing;
+  if (ringing) ringLoop(true);
+  renderCallStatus();
+  renderCallRemotes();
+}
+
+function closeCallOverlay() {
+  ringLoop(false);
+  const overlay = $("call-overlay");
+  overlay.hidden = true;
+  document.body.classList.remove("call-open");
+  const localVideo = $("local-video");
+  try { localVideo.srcObject = null; } catch {}
+  const grid = $("remote-grid");
+  if (grid) grid.innerHTML = "";
+}
+
+function renderCallStatus() {
+  const status = $("call-status");
+  if (!status) return;
+  if (!state.activeCall) {
+    status.textContent = "";
+    return;
+  }
+  if (state.activeCall.ringing) {
+    status.textContent = "вызов… ждём ответа";
+  } else {
+    status.textContent = "на связи";
+  }
+}
+
+function renderCallRemotes() {
+  const grid = $("remote-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  const call = state.activeCall;
+  if (!call) return;
+  for (const [peerId, stream] of call.remoteStreams) {
+    const sess = state.chats.get(call.sessId);
+    const nick = sess?.peerNames.get(peerId) || peerId.slice(0, 6);
+    const tile = document.createElement("div");
+    tile.className = "remote-tile";
+    const v = document.createElement("video");
+    v.autoplay = true;
+    v.playsInline = true;
+    v.srcObject = stream;
+    v.play?.().catch(() => {});
+    const label = document.createElement("div");
+    label.className = "remote-label";
+    label.textContent = `${avatarFor(peerId)} ${nick}`;
+    tile.append(v, label);
+    grid.append(tile);
+  }
+  if (call.remoteStreams.size === 0) {
+    const empty = document.createElement("div");
+    empty.className = "remote-empty";
+    empty.textContent = "ждём братана…";
+    grid.append(empty);
+  }
+}
+
+function toggleMic() {
+  const call = state.activeCall;
+  if (!call) return;
+  const tracks = call.localStream.getAudioTracks();
+  if (!tracks.length) return;
+  const enabled = !tracks[0].enabled;
+  for (const t of tracks) t.enabled = enabled;
+  $("mic-toggle").textContent = enabled ? "🎙️" : "🔇";
+}
+
+function toggleCam() {
+  const call = state.activeCall;
+  if (!call) return;
+  const tracks = call.localStream.getVideoTracks();
+  if (!tracks.length) return;
+  const enabled = !tracks[0].enabled;
+  for (const t of tracks) t.enabled = enabled;
+  $("cam-toggle").textContent = enabled ? "📹" : "🚫";
 }
 
 // --- modals -----------------------------------------------------------------
@@ -1016,6 +1396,21 @@ function wireEvents() {
     removeChat(sess.id);
   });
 
+  // Call buttons
+  $("call-audio").addEventListener("click", () => {
+    const sess = state.activeId && state.chats.get(state.activeId);
+    if (sess) startCall(sess, "audio");
+  });
+  $("call-video").addEventListener("click", () => {
+    const sess = state.activeId && state.chats.get(state.activeId);
+    if (sess) startCall(sess, "video");
+  });
+  $("hang-up").addEventListener("click", () => endCall({}));
+  $("mic-toggle").addEventListener("click", toggleMic);
+  $("cam-toggle").addEventListener("click", toggleCam);
+  $("accept-call").addEventListener("click", acceptIncomingCall);
+  $("reject-call").addEventListener("click", rejectIncomingCall);
+
   $("back").addEventListener("click", () => setActiveChat(null));
 
   // Composer
@@ -1057,7 +1452,14 @@ function wireEvents() {
   // Settings
   $("settings").addEventListener("click", () => {
     $("settings-nick").value = state.nick;
+    $("sound-toggle").checked = state.sound;
     openModal("settings-modal");
+  });
+  $("sound-toggle").addEventListener("change", (ev) => {
+    state.sound = !!ev.target.checked;
+    localStorage.setItem(SOUND_KEY, state.sound ? "1" : "0");
+    // Play a test ding so the user hears it immediately if turned on.
+    if (state.sound) playDing();
   });
   $("save-nick").addEventListener("click", () => {
     const n = $("settings-nick").value.trim().slice(0, 32);

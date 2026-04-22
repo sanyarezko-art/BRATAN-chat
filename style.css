@@ -767,3 +767,159 @@ button.danger:hover { background: rgba(255, 107, 107, 0.25); }
   body.chat-open #chat-view { display: flex; }
   .mobile-only { display: inline-flex; }
 }
+
+/* ---------- Settings toggle switch ---------- */
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.switch input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #6d5cff;
+}
+.switch span {
+  font-size: 14px;
+  color: var(--text, #fff);
+}
+
+/* ---------- Call: incoming prompt ---------- */
+
+.call-actions-row {
+  flex-direction: row !important;
+  gap: 12px;
+}
+.call-actions-row button {
+  flex: 1;
+}
+
+/* ---------- Call: full-screen overlay ---------- */
+
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, #1b1440 0%, #07051a 100%);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  animation: fade-in 0.15s ease;
+}
+.call-overlay[hidden] { display: none !important; }
+
+.call-header {
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #fff;
+  background: linear-gradient(180deg, rgba(0,0,0,0.5), rgba(0,0,0,0));
+}
+.call-title {
+  font-weight: 600;
+  font-size: 16px;
+}
+.call-status {
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.remote-grid {
+  flex: 1;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  padding: 12px;
+  align-content: center;
+  justify-content: center;
+}
+.remote-tile {
+  position: relative;
+  background: rgba(0,0,0,0.45);
+  border-radius: 16px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.remote-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.remote-label {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 4px 10px;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 13px;
+  pointer-events: none;
+}
+.remote-empty {
+  color: rgba(255,255,255,0.7);
+  font-size: 16px;
+  padding: 40px;
+  text-align: center;
+  grid-column: 1 / -1;
+}
+
+.local-video {
+  position: absolute;
+  right: 18px;
+  bottom: 100px;
+  width: 160px;
+  max-width: 28vw;
+  aspect-ratio: 4 / 3;
+  border-radius: 14px;
+  border: 2px solid rgba(255,255,255,0.25);
+  background: #000;
+  object-fit: cover;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  transform: scaleX(-1); /* mirror selfie */
+}
+
+.call-controls {
+  padding: 16px;
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  align-items: center;
+  background: linear-gradient(0deg, rgba(0,0,0,0.55), rgba(0,0,0,0));
+}
+.call-controls .icon-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  font-size: 22px;
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.18);
+}
+.call-controls .danger {
+  padding: 14px 22px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+body.call-open {
+  overflow: hidden;
+}
+
+@media (max-width: 720px) {
+  .local-video {
+    width: 110px;
+    bottom: 110px;
+    right: 10px;
+  }
+}

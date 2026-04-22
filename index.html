@@ -86,6 +86,8 @@
             </div>
           </div>
           <div class="chat-actions">
+            <button id="call-audio" type="button" class="icon-btn" title="Аудио-звонок">📞</button>
+            <button id="call-video" type="button" class="icon-btn" title="Видео-звонок">📹</button>
             <button id="copy-invite-2" type="button" class="icon-btn" title="Скопировать ссылку">🔗</button>
             <button id="rename-chat" type="button" class="icon-btn" title="Переименовать">✏️</button>
             <button id="leave-chat" type="button" class="icon-btn" title="Удалить чат">🗑️</button>
@@ -193,6 +195,11 @@
         <label for="settings-nick">Твой ник</label>
         <input id="settings-nick" type="text" maxlength="32" autocomplete="off" />
         <button id="save-nick" class="primary" type="button">Сохранить ник</button>
+        <div class="divider"><span>уведомления</span></div>
+        <label class="switch">
+          <input id="sound-toggle" type="checkbox" />
+          <span>🔔 Звук нового сообщения</span>
+        </label>
         <div class="divider"><span>анонимность</span></div>
         <p class="fine" style="text-align:left">
           Список чатов и секреты-ключи хранятся только в <code>localStorage</code> твоего браузера. На сервер ничего не уходит. Кнопка ниже удалит всё: ключи, ник, список чатов.
@@ -208,6 +215,42 @@
   <section id="lightbox" class="lightbox" hidden>
     <button class="lightbox-close icon-btn" data-close type="button">✕</button>
     <img id="lightbox-img" src="" alt="" />
+  </section>
+
+  <!-- Incoming call modal -->
+  <section id="incoming-call-modal" class="modal-layer" hidden>
+    <div class="modal">
+      <div class="hero">
+        <div class="logo">📞</div>
+        <h1><span id="incoming-call-nick">…</span></h1>
+        <p class="subtitle" id="incoming-call-kind">звонит</p>
+      </div>
+      <div class="actions call-actions-row">
+        <button id="reject-call" class="danger" type="button">
+          <span class="btn-emoji">✖️</span> Отклонить
+        </button>
+        <button id="accept-call" class="primary" type="button">
+          <span class="btn-emoji">✅</span> Ответить
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Full-screen call overlay -->
+  <section id="call-overlay" class="call-overlay" hidden>
+    <div class="call-header">
+      <div id="call-title" class="call-title">📞 Звонок</div>
+      <div id="call-status" class="call-status">на связи</div>
+    </div>
+    <div id="remote-grid" class="remote-grid"></div>
+    <video id="local-video" class="local-video" autoplay playsinline muted></video>
+    <div class="call-controls">
+      <button id="mic-toggle" class="icon-btn" type="button" title="Микрофон">🎙️</button>
+      <button id="cam-toggle" class="icon-btn" type="button" title="Камера">📹</button>
+      <button id="hang-up" class="danger" type="button" title="Завершить">
+        <span class="btn-emoji">📵</span> Сбросить
+      </button>
+    </div>
   </section>
 
   <script type="module" src="./app.js"></script>
