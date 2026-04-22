@@ -187,34 +187,51 @@ function saveChatIndex() {
 // don't keep the raw bytes around.
 const MESSAGES_SAVE_LIMIT = 200;
 const _saveMessagesTimers = new Map();
+
+function _serializeMessages(sess) {
+  return sess.messages
+    .filter((m) => m && (m.kind === "text" || m.kind === "sys"))
+    .slice(-MESSAGES_SAVE_LIMIT)
+    .map((m) => ({
+      id: m.id,
+      from: m.from,
+      nick: m.nick,
+      ts: m.ts,
+      self: !!m.self,
+      kind: m.kind,
+      text: m.text || "",
+    }));
+}
+
+function _flushMessagesForSession(sess) {
+  try {
+    localStorage.setItem(
+      MESSAGES_KEY_PREFIX + sess.id,
+      JSON.stringify(_serializeMessages(sess)),
+    );
+  } catch (e) {
+    console.warn("flushMessagesForSession failed", e);
+  }
+}
+
 function saveMessagesForSession(sess) {
   if (!sess) return;
   const prev = _saveMessagesTimers.get(sess.id);
   if (prev) clearTimeout(prev);
   const t = setTimeout(() => {
     _saveMessagesTimers.delete(sess.id);
-    try {
-      const persistable = sess.messages
-        .filter((m) => m && (m.kind === "text" || m.kind === "sys"))
-        .slice(-MESSAGES_SAVE_LIMIT)
-        .map((m) => ({
-          id: m.id,
-          from: m.from,
-          nick: m.nick,
-          ts: m.ts,
-          self: !!m.self,
-          kind: m.kind,
-          text: m.text || "",
-        }));
-      localStorage.setItem(
-        MESSAGES_KEY_PREFIX + sess.id,
-        JSON.stringify(persistable),
-      );
-    } catch (e) {
-      console.warn("saveMessagesForSession failed", e);
-    }
+    _flushMessagesForSession(sess);
   }, 400);
   _saveMessagesTimers.set(sess.id, t);
+}
+
+function flushAllPendingMessageSaves() {
+  for (const [sessId, t] of _saveMessagesTimers) {
+    clearTimeout(t);
+    const sess = state.chats.get(sessId);
+    if (sess) _flushMessagesForSession(sess);
+  }
+  _saveMessagesTimers.clear();
 }
 
 function loadMessagesForSession(sess) {
@@ -304,6 +321,8 @@ async function startSession(sess) {
         sess.peerNames.set(peerId, peerId.slice(0, 6));
         pushSystem(sess, `${avatarFor(peerId)} ${peerId.slice(0, 6)}… подключился 🤝`);
       }
+      // First peer found → stop "searching" spinner/watchdog.
+      sess.searchingSince = 0;
       renderChatIfActive(sess);
       renderSidebar();
       try {
@@ -326,6 +345,9 @@ async function startSession(sess) {
         if (sess.peerNames.delete(peerId)) {
           pushSystem(sess, `👋 ${name} вышел`);
         }
+        // If the room is empty again, re-arm the watchdog timer so we'll
+        // rejoin if relays go silent.
+        if (sessionPeerCount(sess) === 0) sess.searchingSince = Date.now();
         renderChatIfActive(sess);
         renderSidebar();
       }, 500);
@@ -479,7 +501,7 @@ async function startSession(sess) {
   renderSidebar();
 }
 
-async function stopSession(sess) {
+async function stopSession(sess, {keepMedia} = {}) {
   if (state.activeCall && state.activeCall.sessId === sess.id) {
     endCall({silent: true});
   }
@@ -489,12 +511,61 @@ async function stopSession(sess) {
     } catch {}
   }
   sess.rooms = [];
-  for (const url of sess.mediaBlobs.values()) {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {}
+  sess.sendMsg = null;
+  sess.sendMedia = null;
+  sess.sendNick = null;
+  sess.sendCall = null;
+  sess.addStream = null;
+  sess.removeStream = null;
+  if (!keepMedia) {
+    for (const url of sess.mediaBlobs.values()) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    }
+    sess.mediaBlobs.clear();
   }
-  sess.mediaBlobs.clear();
+  sess.peerNames.clear();
+  sess.searchingSince = 0;
+}
+
+// Synchronously fire-and-forget leave() on all rooms. Used in `pagehide` —
+// the browser won't wait for async work, but the leave frame is pushed to
+// the websocket immediately which lets relays evict us before the TTL.
+function beaconStopAll() {
+  for (const sess of state.chats.values()) {
+    for (const r of sess.rooms) {
+      try {
+        r.leave();
+      } catch {}
+    }
+    sess.rooms = [];
+  }
+}
+
+// Restart a session in place: tear down the existing trystero rooms and
+// join again. Used by the reconnect watchdog and by online/visible handlers
+// after the tab (or the phone) wakes up from sleep.
+async function restartSession(sess) {
+  if (sess._restarting) return;
+  sess._restarting = true;
+  try {
+    await stopSession(sess, {keepMedia: true});
+    await startSession(sess);
+  } finally {
+    sess._restarting = false;
+  }
+}
+
+function sessionPeerCount(sess) {
+  return sess.peerNames.size;
+}
+
+function sessionRelayCount(sess) {
+  // Count rooms that still have their underlying socket hot. Trystero doesn't
+  // expose a health API, so we approximate: if rooms[] is empty after a
+  // meaningful startup window we consider the session dead.
+  return sess.rooms.length;
 }
 
 function trimSet(set, max) {
@@ -1711,6 +1782,9 @@ async function bootApp() {
         createdAt: c.createdAt || Date.now(),
       });
       state.chats.set(id, sess);
+      // Load persisted text/system messages BEFORE the session joins trystero
+      // so they are visible immediately when the chat opens.
+      loadMessagesForSession(sess);
     } catch (e) {
       console.warn("skip invalid saved chat", e);
     }
@@ -1739,6 +1813,95 @@ window.addEventListener("hashchange", async () => {
   const sess = await createChatFromSecret(parsed.secret, parsed.bytes);
   setActiveChat(sess.id);
 });
+
+// --- reconnect plumbing ----------------------------------------------------
+//
+// Relays (nostr/mqtt/torrent) drop silently when the tab is backgrounded on
+// mobile or when Wi-Fi flaps. The stock Trystero doesn't auto-reconnect,
+// which leads to "ищем братана…" forever after wake-up. We add:
+//   * `pagehide` / `beforeunload` — best-effort `leave()` so remote peers
+//     see us go immediately (otherwise TTL is ~30-60s).
+//   * `visibilitychange` + `online` — if a session has no peers or no rooms
+//     after waking up, rejoin.
+//   * A 20s watchdog — if a chat has been "searching" for >45s with zero
+//     peers, tear it down and re-join.
+
+function scheduleReconnectIfStale(reason) {
+  for (const sess of state.chats.values()) {
+    if (sess._restarting) continue;
+    if (sess.rooms.length === 0) {
+      console.info(`[reconnect] ${reason}: ${sess.id.slice(0, 8)} has no rooms, rejoin`);
+      restartSession(sess);
+      continue;
+    }
+    if (sessionPeerCount(sess) === 0 && sess.searchingSince) {
+      const waited = Date.now() - sess.searchingSince;
+      if (waited > 20000) {
+        console.info(`[reconnect] ${reason}: ${sess.id.slice(0, 8)} alone for ${waited}ms, rejoin`);
+        restartSession(sess);
+      }
+    }
+  }
+}
+
+window.addEventListener(
+  "pagehide",
+  () => {
+    // Flush pending message saves synchronously — otherwise the 400 ms
+    // debounce can drop the latest messages if the user reloads fast.
+    flushAllPendingMessageSaves();
+    beaconStopAll();
+  },
+  {capture: true},
+);
+// `beforeunload` is a belt-and-suspenders for browsers where pagehide is
+// skipped (rare, mostly Safari desktop with specific back-forward-cache
+// states). Both handlers are idempotent.
+window.addEventListener(
+  "beforeunload",
+  () => {
+    flushAllPendingMessageSaves();
+    beaconStopAll();
+  },
+  {capture: true},
+);
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    scheduleReconnectIfStale("visible");
+  } else {
+    // When the tab is backgrounded (mobile home button, screen off),
+    // force-flush pending saves. iOS Safari will kill us shortly.
+    flushAllPendingMessageSaves();
+  }
+});
+
+window.addEventListener("online", () => scheduleReconnectIfStale("online"));
+
+// Watchdog: every 20s, if a session has been searching for more than 45s,
+// kick it.
+setInterval(() => {
+  const now = Date.now();
+  for (const sess of state.chats.values()) {
+    if (sess._restarting) continue;
+    if (!sess.searchingSince) continue;
+    if (sessionPeerCount(sess) > 0) continue;
+    if (now - sess.searchingSince > 45000) {
+      console.info(`[watchdog] ${sess.id.slice(0, 8)} stale, rejoin`);
+      restartSession(sess);
+    }
+  }
+}, 20000);
+
+// Register service worker so the site is installable as a PWA (Android
+// "Add to Home Screen" -> real app icon, standalone UI, splash screen).
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("./sw.js", {scope: "./"})
+      .catch((e) => console.warn("sw register failed", e));
+  });
+}
 
 // Kick off
 (async () => {
