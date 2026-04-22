@@ -239,17 +239,20 @@
   <!-- Full-screen call overlay -->
   <section id="call-overlay" class="call-overlay" hidden>
     <div class="call-header">
-      <div id="call-title" class="call-title">📞 Звонок</div>
-      <div id="call-status" class="call-status">на связи</div>
+      <div class="call-header-text">
+        <div id="call-title" class="call-title">📞 Звонок</div>
+        <div id="call-status" class="call-status">на связи</div>
+      </div>
+      <button id="hang-up-top" class="icon-btn call-hangup-top" type="button" title="Сбросить">📵</button>
     </div>
     <div id="remote-grid" class="remote-grid"></div>
     <video id="local-video" class="local-video" autoplay playsinline muted></video>
     <div class="call-controls">
       <button id="mic-toggle" class="icon-btn" type="button" title="Микрофон">🎙️</button>
-      <button id="cam-toggle" class="icon-btn" type="button" title="Камера">📹</button>
       <button id="hang-up" class="danger" type="button" title="Завершить">
         <span class="btn-emoji">📵</span> Сбросить
       </button>
+      <button id="cam-toggle" class="icon-btn" type="button" title="Камера">📹</button>
     </div>
   </section>
 

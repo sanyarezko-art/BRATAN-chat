@@ -807,11 +807,15 @@ button.danger:hover { background: rgba(255, 107, 107, 0.25); }
 .call-overlay {
   position: fixed;
   inset: 0;
+  height: 100vh;
+  height: 100dvh;
   background: radial-gradient(ellipse at center, #1b1440 0%, #07051a 100%);
   z-index: 200;
   display: flex;
   flex-direction: column;
   animation: fade-in 0.15s ease;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
 }
 .call-overlay[hidden] { display: none !important; }
 
@@ -820,9 +824,27 @@ button.danger:hover { background: rgba(255, 107, 107, 0.25); }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   color: #fff;
   background: linear-gradient(180deg, rgba(0,0,0,0.5), rgba(0,0,0,0));
 }
+.call-header-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.call-hangup-top {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #ff3b4e;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.2);
+  font-size: 20px;
+  box-shadow: 0 6px 20px rgba(255,59,78,0.5);
+}
+.call-hangup-top:hover { background: #ff1f35; }
 .call-title {
   font-weight: 600;
   font-size: 16px;
@@ -875,6 +897,42 @@ button.danger:hover { background: rgba(255, 107, 107, 0.25); }
   grid-column: 1 / -1;
 }
 
+.calling-card {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px 20px;
+  color: #fff;
+  animation: pulse 2s ease-in-out infinite;
+}
+.calling-avatar {
+  font-size: 80px;
+  line-height: 1;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.08);
+  border: 2px solid rgba(255,255,255,0.2);
+}
+.calling-nick {
+  font-size: 22px;
+  font-weight: 600;
+}
+.calling-status {
+  font-size: 15px;
+  opacity: 0.8;
+}
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.03); opacity: 0.85; }
+}
+
 .local-video {
   position: absolute;
   right: 18px;
@@ -907,10 +965,17 @@ button.danger:hover { background: rgba(255, 107, 107, 0.25); }
   border: 1px solid rgba(255,255,255,0.18);
 }
 .call-controls .danger {
-  padding: 14px 22px;
+  padding: 16px 26px;
   border-radius: 999px;
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 16px;
+  background: #ff3b4e;
+  color: #fff;
+  border: none;
+  box-shadow: 0 6px 24px rgba(255,59,78,0.5);
+  min-width: 180px;
 }
+.call-controls .danger:hover { background: #ff1f35; }
 
 body.call-open {
   overflow: hidden;

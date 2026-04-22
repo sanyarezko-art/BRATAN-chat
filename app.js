@@ -204,6 +204,7 @@ function createSession({id, secretStr, secretBytes, password, name, createdAt}) 
     searchingSince: 0,
     seenMsgs: new Set(),
     mediaBlobs: new Map(), // mediaId -> blobUrl
+    pendingRemoteStreams: new Map(), // peerId -> MediaStream (buffered while call not yet active)
   };
 }
 
@@ -1060,6 +1061,7 @@ async function startCall(sess, kind) {
   // Attach stream to all rooms.
   sess.addStream(localStream);
   openCallOverlay(sess, {ringing: true});
+  applyPendingRemoteStreams(sess);
 }
 
 function acceptIncomingCall() {
@@ -1096,6 +1098,9 @@ function acceptIncomingCall() {
     sess.addStream(localStream);
     sess.sendCall({type: "accept", ts: Date.now()}, pending.peerId);
     openCallOverlay(sess, {ringing: false});
+    // The caller may have started pushing their stream BEFORE we accepted.
+    // Flush any buffered inbound streams so we actually see/hear them.
+    applyPendingRemoteStreams(sess);
   })();
 }
 
@@ -1121,6 +1126,7 @@ function endCall({silent} = {}) {
     }
   } catch {}
   state.activeCall = null;
+  if (sess) sess.pendingRemoteStreams.clear();
   if (sess && !silent) sess.sendCall({type: "end"});
   closeCallOverlay();
 }
@@ -1164,11 +1170,31 @@ function handleCallSignal(sess, peerId, payload) {
 
 function attachRemoteStream(sess, peerId, stream) {
   const call = state.activeCall;
-  if (!call || call.sessId !== sess.id) return;
+  if (!call || call.sessId !== sess.id) {
+    // Buffer the stream — caller might have added it before we accepted.
+    // When the user answers, applyPendingRemoteStreams() will flush these in.
+    sess.pendingRemoteStreams.set(peerId, stream);
+    return;
+  }
   call.remoteStreams.set(peerId, stream);
   call.ringing = false;
   ringLoop(false);
   renderCallRemotes();
+  renderCallStatus();
+}
+
+function applyPendingRemoteStreams(sess) {
+  const call = state.activeCall;
+  if (!call || call.sessId !== sess.id) return;
+  if (!sess.pendingRemoteStreams.size) return;
+  for (const [peerId, stream] of sess.pendingRemoteStreams) {
+    call.remoteStreams.set(peerId, stream);
+  }
+  sess.pendingRemoteStreams.clear();
+  call.ringing = false;
+  ringLoop(false);
+  renderCallRemotes();
+  renderCallStatus();
 }
 
 // --- call UI ----------------------------------------------------------------
@@ -1256,10 +1282,23 @@ function renderCallRemotes() {
     grid.append(tile);
   }
   if (call.remoteStreams.size === 0) {
-    const empty = document.createElement("div");
-    empty.className = "remote-empty";
-    empty.textContent = "ждём братана…";
-    grid.append(empty);
+    const sess = state.chats.get(call.sessId);
+    const peers = sess ? [...sess.peerNames.entries()] : [];
+    const card = document.createElement("div");
+    card.className = "calling-card";
+    const av = document.createElement("div");
+    av.className = "calling-avatar";
+    av.textContent = peers.length ? avatarFor(peers[0][0]) : "📞";
+    const nm = document.createElement("div");
+    nm.className = "calling-nick";
+    nm.textContent = peers.length
+      ? (peers[0][1] || peers[0][0].slice(0, 6))
+      : "братан";
+    const st = document.createElement("div");
+    st.className = "calling-status";
+    st.textContent = call.ringing ? "вызываю… 🔔" : "соединяемся…";
+    card.append(av, nm, st);
+    grid.append(card);
   }
 }
 
@@ -1406,6 +1445,7 @@ function wireEvents() {
     if (sess) startCall(sess, "video");
   });
   $("hang-up").addEventListener("click", () => endCall({}));
+  $("hang-up-top").addEventListener("click", () => endCall({}));
   $("mic-toggle").addEventListener("click", toggleMic);
   $("cam-toggle").addEventListener("click", toggleCam);
   $("accept-call").addEventListener("click", acceptIncomingCall);
